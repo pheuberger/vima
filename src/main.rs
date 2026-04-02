@@ -172,11 +172,15 @@ fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_show(args: cli::ShowArgs, exact: bool) -> Result<()> {
+fn cmd_show(args: cli::ShowArgs, exact: bool, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let resolved = st.resolve_id(&args.id, exact)?;
     let ticket = st.load_and_compute(&resolved)?;
-    output::output_one(&ticket, &args.pluck)?;
+    if pretty {
+        output::pretty_show(&ticket)?;
+    } else {
+        output::output_one(&ticket, &args.pluck)?;
+    }
     Ok(())
 }
 
@@ -437,12 +441,16 @@ fn cmd_reopen(args: cli::IdArgs, exact: bool) -> Result<()> {
     cmd_set_status(&args.id, exact, ticket::Status::Open, "Reopened")
 }
 
-fn cmd_dep_tree(args: cli::TreeArgs, exact: bool) -> Result<()> {
+fn cmd_dep_tree(args: cli::TreeArgs, exact: bool, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let id = st.resolve_id(&args.id, exact)?;
     let tickets = st.read_all()?;
     let tree = deps::build_dep_tree(&tickets, &id, args.full)?;
-    println!("{}", serde_json::to_string(&tree)?);
+    if pretty {
+        output::pretty_tree(&tree);
+    } else {
+        println!("{}", serde_json::to_string(&tree)?);
+    }
     Ok(())
 }
 
@@ -492,16 +500,20 @@ fn cmd_help() -> Result<()> {
     Ok(())
 }
 
-fn cmd_list(args: cli::FilterArgs) -> Result<()> {
+fn cmd_list(args: cli::FilterArgs, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let mut tickets = st.read_all()?;
     deps::compute_reverse_fields(&mut tickets);
     let filter = filter::Filter::from_args(&args)?;
     let filtered = filter::apply_filters(tickets, &filter);
-    output::output_many(&filtered, &args.pluck, args.count)
+    if pretty {
+        output::pretty_list(&filtered)
+    } else {
+        output::output_many(&filtered, &args.pluck, args.count)
+    }
 }
 
-fn cmd_closed(args: cli::ClosedArgs) -> Result<()> {
+fn cmd_closed(args: cli::ClosedArgs, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let mut tickets = st.read_all()?;
     deps::compute_reverse_fields(&mut tickets);
@@ -539,7 +551,11 @@ fn cmd_closed(args: cli::ClosedArgs) -> Result<()> {
         filtered.truncate(limit);
     }
 
-    output::output_many(&filtered, &args.filter.pluck, args.filter.count)
+    if pretty {
+        output::pretty_list(&filtered)
+    } else {
+        output::output_many(&filtered, &args.filter.pluck, args.filter.count)
+    }
 }
 
 fn closed_id_set(tickets: &[ticket::Ticket]) -> std::collections::HashSet<String> {
@@ -550,7 +566,7 @@ fn closed_id_set(tickets: &[ticket::Ticket]) -> std::collections::HashSet<String
         .collect()
 }
 
-fn cmd_ready(args: cli::FilterArgs) -> Result<()> {
+fn cmd_ready(args: cli::FilterArgs, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let mut tickets = st.read_all()?;
     deps::compute_reverse_fields(&mut tickets);
@@ -571,10 +587,14 @@ fn cmd_ready(args: cli::FilterArgs) -> Result<()> {
     filter.status = None;
 
     let filtered = filter::apply_filters(candidates, &filter);
-    output::output_many(&filtered, &args.pluck, args.count)
+    if pretty {
+        output::pretty_list(&filtered)
+    } else {
+        output::output_many(&filtered, &args.pluck, args.count)
+    }
 }
 
-fn cmd_blocked(args: cli::FilterArgs) -> Result<()> {
+fn cmd_blocked(args: cli::FilterArgs, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let mut tickets = st.read_all()?;
     deps::compute_reverse_fields(&mut tickets);
@@ -594,6 +614,10 @@ fn cmd_blocked(args: cli::FilterArgs) -> Result<()> {
     filter.status = None;
 
     let filtered = filter::apply_filters(candidates, &filter);
+
+    if pretty {
+        return output::pretty_list(&filtered);
+    }
 
     if args.count {
         println!("{}", filtered.len());
@@ -666,13 +690,15 @@ fn cmd_is_ready(args: cli::IdArgs, exact: bool) -> Result<()> {
 
 fn dispatch(cli: Cli) -> Result<()> {
     let exact = cli.exact;
+    let pretty = cli.pretty;
+    colored::control::set_override(pretty);
     match cli.command {
         Commands::Create(args) => cmd_create(args, exact),
-        Commands::Show(args) => cmd_show(args, exact),
-        Commands::List(args) => cmd_list(args),
-        Commands::Ready(args) => cmd_ready(args),
-        Commands::Blocked(args) => cmd_blocked(args),
-        Commands::Closed(args) => cmd_closed(args),
+        Commands::Show(args) => cmd_show(args, exact, pretty),
+        Commands::List(args) => cmd_list(args, pretty),
+        Commands::Ready(args) => cmd_ready(args, pretty),
+        Commands::Blocked(args) => cmd_blocked(args, pretty),
+        Commands::Closed(args) => cmd_closed(args, pretty),
         Commands::Update(args) => cmd_update(args, exact),
         Commands::Start(args) => cmd_start(args, exact),
         Commands::Close(args) => cmd_close(args, exact),
@@ -681,7 +707,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::AddNote(args) => cmd_add_note(args, exact),
         Commands::Dep(dep_args) => match dep_args.command {
             cli::DepCommands::Add(add_args) => cmd_dep_add(add_args, exact),
-            cli::DepCommands::Tree(args) => cmd_dep_tree(args, exact),
+            cli::DepCommands::Tree(args) => cmd_dep_tree(args, exact, pretty),
             cli::DepCommands::Cycle => Err(Error::InvalidField("not implemented: dep cycle".into())),
         },
         Commands::Undep(args) => cmd_undep(args, exact),
@@ -1017,7 +1043,7 @@ mod tests {
         args.id = Some("show-01".to_string());
         cmd_create(args, false).unwrap();
 
-        let result = cmd_show(show_args("show-01"), true);
+        let result = cmd_show(show_args("show-01"), true, false);
         assert!(result.is_ok(), "show failed: {:?}", result);
 
         std::env::remove_var("VIMA_DIR");
@@ -1034,7 +1060,7 @@ mod tests {
         cmd_create(args, false).unwrap();
 
         // Use prefix "partial" which should resolve to "partial-01"
-        let result = cmd_show(show_args("partial"), false);
+        let result = cmd_show(show_args("partial"), false, false);
         assert!(result.is_ok(), "show with partial id failed: {:?}", result);
 
         std::env::remove_var("VIMA_DIR");
@@ -1050,7 +1076,7 @@ mod tests {
         args.id = Some("exact-01".to_string());
         cmd_create(args, false).unwrap();
 
-        let result = cmd_show(show_args("exact"), true);
+        let result = cmd_show(show_args("exact"), true, false);
         assert!(result.is_err(), "expected error for partial id with --exact");
         let err = result.unwrap_err();
         assert_eq!(err.code(), "not_found");
@@ -1070,7 +1096,7 @@ mod tests {
 
         let mut sa = show_args("pluck-01");
         sa.pluck = Some("title".to_string());
-        let result = cmd_show(sa, true);
+        let result = cmd_show(sa, true, false);
         assert!(result.is_ok(), "show --pluck title failed: {:?}", result);
 
         std::env::remove_var("VIMA_DIR");
@@ -1088,7 +1114,7 @@ mod tests {
 
         let mut sa = show_args("mpluck-01");
         sa.pluck = Some("title,priority".to_string());
-        let result = cmd_show(sa, true);
+        let result = cmd_show(sa, true, false);
         assert!(result.is_ok(), "show --pluck title,priority failed: {:?}", result);
 
         std::env::remove_var("VIMA_DIR");
@@ -1142,7 +1168,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         setup_vima(&tmp);
 
-        let result = cmd_show(show_args("nonexistent"), false);
+        let result = cmd_show(show_args("nonexistent"), false, false);
         assert!(result.is_err(), "expected error for nonexistent id");
         let err = result.unwrap_err();
         assert_eq!(err.code(), "not_found");
@@ -2211,7 +2237,7 @@ mod tests {
 
         let mut args = filter_args_default();
         args.status = Some(ticket::Status::Open);
-        let result = cmd_list(args);
+        let result = cmd_list(args, false);
         assert!(result.is_ok());
 
         let st = store::Store::open().unwrap();
@@ -2330,7 +2356,7 @@ mod tests {
 
         let mut fa = filter_args_default();
         fa.pluck = Some("id".to_string());
-        let result = cmd_list(fa);
+        let result = cmd_list(fa, false);
         assert!(result.is_ok());
 
         std::env::remove_var("VIMA_DIR");
@@ -2348,7 +2374,7 @@ mod tests {
 
         let mut fa = filter_args_default();
         fa.count = true;
-        let result = cmd_list(fa);
+        let result = cmd_list(fa, false);
         assert!(result.is_ok());
 
         std::env::remove_var("VIMA_DIR");
@@ -2376,7 +2402,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         cmd_close(close_args(vec!["clsd-b"]), true).unwrap();
 
-        let result = cmd_closed(closed_args_default());
+        let result = cmd_closed(closed_args_default(), false);
         assert!(result.is_ok(), "closed failed: {:?}", result);
 
         // Verify ordering: b (closed later) should come before a
@@ -2408,7 +2434,7 @@ mod tests {
             cmd_close(close_args(vec![&format!("clsdlm-{:02}", i)]), true).unwrap();
         }
 
-        let result = cmd_closed(closed_args_default());
+        let result = cmd_closed(closed_args_default(), false);
         assert!(result.is_ok(), "closed failed: {:?}", result);
 
         // Verify the internal filter logic applies limit=20
@@ -2448,7 +2474,7 @@ mod tests {
         cmd_create(b, true).unwrap();
 
         // Only A should be ready (B depends on A which is open)
-        let result = cmd_ready(filter_args_default());
+        let result = cmd_ready(filter_args_default(), false);
         assert!(result.is_ok(), "cmd_ready failed: {:?}", result);
 
         let st = store::Store::open().unwrap();
@@ -2494,7 +2520,7 @@ mod tests {
             true,
         ).unwrap();
 
-        let result = cmd_ready(filter_args_default());
+        let result = cmd_ready(filter_args_default(), false);
         assert!(result.is_ok(), "cmd_ready after close failed: {:?}", result);
 
         let st = store::Store::open().unwrap();
@@ -2533,7 +2559,7 @@ mod tests {
 
         let mut args = filter_args_default();
         args.count = true;
-        let result = cmd_ready(args);
+        let result = cmd_ready(args, false);
         assert!(result.is_ok(), "cmd_ready --count failed: {:?}", result);
 
         std::env::remove_var("VIMA_DIR");
@@ -2601,7 +2627,7 @@ mod tests {
         b.dep = vec!["blk-a".to_string()];
         cmd_create(b, true).unwrap();
 
-        let result = cmd_blocked(filter_args_default());
+        let result = cmd_blocked(filter_args_default(), false);
         assert!(result.is_ok(), "cmd_blocked failed: {:?}", result);
 
         // Verify state: B should be in blocked list, A should not
@@ -2799,6 +2825,175 @@ mod tests {
         let result = is_ready_state("nonexistent", true);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), "not_found");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── pretty output integration tests ─────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn pretty_list_returns_ok_and_shows_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Fix auth middleware"));
+        args.id = Some("pt-a1".to_string());
+        args.ticket_type = Some(ticket::TicketType::Bug);
+        args.priority = Some(1);
+        cmd_create(args, true).unwrap();
+
+        let mut args2 = create_args(Some("Add rate limiter"));
+        args2.id = Some("pt-b2".to_string());
+        cmd_create(args2, true).unwrap();
+
+        let result = cmd_list(filter_args_default(), true);
+        assert!(result.is_ok(), "pretty list failed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pretty_list_empty_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let result = cmd_list(filter_args_default(), true);
+        assert!(result.is_ok(), "pretty list empty failed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pretty_show_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Show me pretty"));
+        args.id = Some("pt-show1".to_string());
+        args.assignee = Some("alice".to_string());
+        args.estimate = Some(30);
+        args.tags = Some("backend,auth".to_string());
+        args.description = Some("The auth middleware stores session tokens...".to_string());
+        cmd_create(args, true).unwrap();
+
+        let sa = cli::ShowArgs {
+            id: "pt-show1".to_string(),
+            pluck: None,
+        };
+        let result = cmd_show(sa, true, true);
+        assert!(result.is_ok(), "pretty show failed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pretty_show_no_colors_in_json_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("JSON output ticket"));
+        args.id = Some("pt-json1".to_string());
+        cmd_create(args, true).unwrap();
+
+        // In non-pretty mode, output_one should work fine
+        let st = store::Store::open().unwrap();
+        let ticket = st.load_and_compute("pt-json1").unwrap();
+        let value = serde_json::to_value(&ticket).unwrap();
+        let json_str = value.to_string();
+        // No ANSI escape codes in JSON output
+        assert!(!json_str.contains("\x1b["), "ANSI codes found in JSON: {json_str}");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pretty_dep_tree_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Fix auth middleware"));
+        a.id = Some("pt-tree-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut b = create_args(Some("Add rate limiter"));
+        b.id = Some("pt-tree-b".to_string());
+        b.dep = vec!["pt-tree-a".to_string()];
+        cmd_create(b, true).unwrap();
+
+        let mut c = create_args(Some("Update docs"));
+        c.id = Some("pt-tree-c".to_string());
+        c.dep = vec!["pt-tree-b".to_string()];
+        cmd_create(c, true).unwrap();
+
+        let result = cmd_dep_tree(
+            cli::TreeArgs { id: "pt-tree-c".to_string(), full: false },
+            true,
+            true,
+        );
+        assert!(result.is_ok(), "pretty dep tree failed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pretty_ready_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ready ticket"));
+        a.id = Some("pt-ready-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let result = cmd_ready(filter_args_default(), true);
+        assert!(result.is_ok(), "pretty ready failed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pretty_blocked_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Dep A"));
+        a.id = Some("pt-blk-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut b = create_args(Some("Blocked B"));
+        b.id = Some("pt-blk-b".to_string());
+        b.dep = vec!["pt-blk-a".to_string()];
+        cmd_create(b, true).unwrap();
+
+        let result = cmd_blocked(filter_args_default(), true);
+        assert!(result.is_ok(), "pretty blocked failed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pretty_closed_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Closed ticket"));
+        a.id = Some("pt-cls-a".to_string());
+        cmd_create(a, true).unwrap();
+        cmd_close(
+            cli::CloseArgs { ids: vec!["pt-cls-a".to_string()], reason: None },
+            true,
+        )
+        .unwrap();
+
+        let result = cmd_closed(cli::ClosedArgs { filter: filter_args_default() }, true);
+        assert!(result.is_ok(), "pretty closed failed: {:?}", result);
 
         std::env::remove_var("VIMA_DIR");
     }

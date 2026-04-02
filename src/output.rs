@@ -1,5 +1,8 @@
+use colored::Colorize;
+
+use crate::deps::TreeNode;
 use crate::error::Result;
-use crate::ticket::Ticket;
+use crate::ticket::{Status, Ticket};
 
 pub fn output_one(ticket: &Ticket, pluck: &Option<String>) -> Result<()> {
     let value = serde_json::to_value(ticket)?;
@@ -50,6 +53,190 @@ pub fn output_plucked(values: &[serde_json::Value], fields: &str) {
         .map(|v| pluck_value(v, fields))
         .collect();
     println!("{}", serde_json::Value::Array(result));
+}
+
+// ── Pretty output helpers ────────────────────────────────────────────────────
+
+fn colorize_status(status: &Status) -> String {
+    match status {
+        Status::Open => status.as_str().green().to_string(),
+        Status::InProgress => status.as_str().yellow().to_string(),
+        Status::Closed => status.as_str().dimmed().to_string(),
+    }
+}
+
+fn colorize_priority(priority: u8) -> String {
+    let s = priority.to_string();
+    match priority {
+        0 | 1 => s.red().to_string(),
+        _ => s,
+    }
+}
+
+fn format_estimate(minutes: u32) -> String {
+    if minutes < 60 {
+        format!("{}m", minutes)
+    } else {
+        let h = minutes / 60;
+        let m = minutes % 60;
+        if m == 0 {
+            format!("{}h", h)
+        } else {
+            format!("{}h {}m", h, m)
+        }
+    }
+}
+
+fn truncate(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() > max_chars {
+        let truncated: String = chars[..max_chars - 1].iter().collect();
+        format!("{}…", truncated)
+    } else {
+        s.to_string()
+    }
+}
+
+// ── pretty_list ──────────────────────────────────────────────────────────────
+
+pub fn pretty_list(tickets: &[Ticket]) -> Result<()> {
+    if tickets.is_empty() {
+        println!("No tickets found.");
+        return Ok(());
+    }
+
+    let id_w = tickets
+        .iter()
+        .map(|t| t.id.len())
+        .max()
+        .unwrap_or(2)
+        .max("ID".len());
+    let status_w = tickets
+        .iter()
+        .map(|t| t.status.as_str().len())
+        .max()
+        .unwrap_or(4)
+        .max("STATUS".len());
+    let type_w = tickets
+        .iter()
+        .map(|t| t.ticket_type.as_str().len())
+        .max()
+        .unwrap_or(4)
+        .max("TYPE".len());
+
+    // Header row (no color)
+    println!(
+        "{:<id_w$}  {:<1}  {:<status_w$}  {:<type_w$}  {}",
+        "ID",
+        "P",
+        "STATUS",
+        "TYPE",
+        "TITLE",
+        id_w = id_w,
+        status_w = status_w,
+        type_w = type_w
+    );
+
+    for t in tickets {
+        let title = truncate(&t.title, 50);
+        let id_padded = format!("{:<width$}", t.id, width = id_w);
+        let priority_str = colorize_priority(t.priority);
+        // Color status then pad manually so ANSI codes don't break alignment
+        let status_colored = colorize_status(&t.status);
+        let status_padding = " ".repeat(status_w.saturating_sub(t.status.as_str().len()));
+        let type_padded = format!("{:<width$}", t.ticket_type.as_str(), width = type_w);
+
+        println!(
+            "{}  {}  {}{}  {}  {}",
+            id_padded, priority_str, status_colored, status_padding, type_padded, title
+        );
+    }
+    Ok(())
+}
+
+// ── pretty_show ──────────────────────────────────────────────────────────────
+
+pub fn pretty_show(ticket: &Ticket) -> Result<()> {
+    // Header: id — title
+    println!("{} \u{2014} {}", ticket.id.bold(), ticket.title);
+
+    // Status / Type / Priority line
+    let status_colored = colorize_status(&ticket.status);
+    let priority_colored = colorize_priority(ticket.priority);
+    println!(
+        "Status: {}  Type: {}  Priority: {}",
+        status_colored,
+        ticket.ticket_type.as_str(),
+        priority_colored
+    );
+
+    // Tags
+    if !ticket.tags.is_empty() {
+        println!("Tags: {}", ticket.tags.join(", "));
+    }
+
+    // Assignee / Estimate on one line if present
+    let mut meta: Vec<String> = Vec::new();
+    if let Some(ref assignee) = ticket.assignee {
+        meta.push(format!("Assignee: {}", assignee));
+    }
+    if let Some(est) = ticket.estimate {
+        meta.push(format!("Estimate: {}", format_estimate(est)));
+    }
+    if !meta.is_empty() {
+        println!("{}", meta.join("  "));
+    }
+
+    println!("Created: {}", ticket.created);
+
+    if let Some(ref desc) = ticket.description {
+        println!("\nDescription:");
+        for line in desc.lines() {
+            println!("  {}", line);
+        }
+    }
+
+    if !ticket.deps.is_empty() {
+        println!("Deps: {}", ticket.deps.join(", "));
+    }
+    if !ticket.blocks.is_empty() {
+        println!("Blocks: {}", ticket.blocks.join(", "));
+    }
+
+    Ok(())
+}
+
+// ── pretty_tree ──────────────────────────────────────────────────────────────
+
+pub fn pretty_tree(node: &TreeNode) {
+    println!(
+        "{} {} ({})",
+        node.id,
+        node.title,
+        node.status.as_str()
+    );
+    print_tree_children(&node.deps, "");
+}
+
+fn print_tree_children(children: &[TreeNode], prefix: &str) {
+    for (i, child) in children.iter().enumerate() {
+        let is_last = i == children.len() - 1;
+        let connector = if is_last { "\u{2514}\u{2500}\u{2500} " } else { "\u{251c}\u{2500}\u{2500} " };
+        println!(
+            "{}{}{} {} ({})",
+            prefix,
+            connector,
+            child.id,
+            child.title,
+            child.status.as_str()
+        );
+        let new_prefix = if is_last {
+            format!("{}    ", prefix)
+        } else {
+            format!("{}\u{2502}   ", prefix)
+        };
+        print_tree_children(&child.deps, &new_prefix);
+    }
 }
 
 #[cfg(test)]
@@ -118,5 +305,77 @@ mod tests {
         let ticket = make_ticket();
         let result = output_one(&ticket, &None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn format_estimate_minutes_only() {
+        assert_eq!(format_estimate(30), "30m");
+        assert_eq!(format_estimate(0), "0m");
+        assert_eq!(format_estimate(59), "59m");
+    }
+
+    #[test]
+    fn format_estimate_hours_only() {
+        assert_eq!(format_estimate(60), "1h");
+        assert_eq!(format_estimate(120), "2h");
+    }
+
+    #[test]
+    fn format_estimate_hours_and_minutes() {
+        assert_eq!(format_estimate(90), "1h 30m");
+        assert_eq!(format_estimate(75), "1h 15m");
+    }
+
+    #[test]
+    fn truncate_short_string_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_long_string_gets_ellipsis() {
+        let s = "a".repeat(55);
+        let result = truncate(&s, 50);
+        assert_eq!(result.chars().count(), 50); // 49 chars + ellipsis
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn pretty_list_empty_prints_no_tickets() {
+        // Just verify it doesn't panic and returns Ok
+        colored::control::set_override(true);
+        let result = pretty_list(&[]);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_list_with_tickets_returns_ok() {
+        colored::control::set_override(true);
+        let tickets = vec![make_ticket()];
+        let result = pretty_list(&tickets);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_show_returns_ok() {
+        colored::control::set_override(true);
+        let ticket = make_ticket();
+        let result = pretty_show(&ticket);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_tree_single_node_no_panic() {
+        colored::control::set_override(true);
+        let node = TreeNode {
+            id: "t-1".to_string(),
+            title: "Root".to_string(),
+            status: Status::Open,
+            deps: vec![],
+        };
+        pretty_tree(&node); // just verify no panic
+        colored::control::set_override(false);
     }
 }
