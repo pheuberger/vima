@@ -1,6 +1,233 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::ticket::Ticket;
+use serde::Serialize;
+
+use crate::error::{Error, Result};
+use crate::ticket::{Status, Ticket};
+
+#[derive(Serialize, Debug)]
+pub struct TreeNode {
+    pub id: String,
+    pub status: Status,
+    pub title: String,
+    pub deps: Vec<TreeNode>,
+}
+
+/// Build a dependency tree rooted at `root_id`.
+/// In dedup mode (full=false): each node appears once at its deepest position.
+/// In full mode (full=true): nodes may repeat, but cycles are still marked.
+pub fn build_dep_tree(tickets: &[Ticket], root_id: &str, full: bool) -> Result<TreeNode> {
+    let ticket_map: HashMap<&str, &Ticket> =
+        tickets.iter().map(|t| (t.id.as_str(), t)).collect();
+
+    if !ticket_map.contains_key(root_id) {
+        return Err(Error::NotFound(root_id.to_string()));
+    }
+
+    let dep_map: HashMap<&str, &[String]> = tickets
+        .iter()
+        .map(|t| (t.id.as_str(), t.deps.as_slice()))
+        .collect();
+
+    if full {
+        Ok(build_full_subtree(&ticket_map, &dep_map, root_id, &mut HashSet::new()))
+    } else {
+        let mut max_depth: HashMap<String, usize> = HashMap::new();
+        dfs_max_depth(&dep_map, root_id, 0, &mut HashSet::new(), &mut max_depth);
+        Ok(build_dedup_subtree(
+            &ticket_map,
+            &dep_map,
+            root_id,
+            0,
+            &mut HashSet::new(),
+            &max_depth,
+            &mut HashSet::new(),
+        ))
+    }
+}
+
+/// Compute the maximum depth at which each reachable node appears (iterative DFS).
+fn dfs_max_depth(
+    dep_map: &HashMap<&str, &[String]>,
+    id: &str,
+    depth: usize,
+    path: &mut HashSet<String>,
+    max_depth: &mut HashMap<String, usize>,
+) {
+    if path.contains(id) {
+        return; // cycle — stop recursion
+    }
+    let entry = max_depth.entry(id.to_string()).or_insert(0);
+    if depth > *entry {
+        *entry = depth;
+    }
+    path.insert(id.to_string());
+    if let Some(deps) = dep_map.get(id) {
+        for dep in *deps {
+            dfs_max_depth(dep_map, dep, depth + 1, path, max_depth);
+        }
+    }
+    path.remove(id);
+}
+
+/// Compute the height (depth of deepest descendant) of the subtree rooted at `id`.
+fn subtree_height(
+    dep_map: &HashMap<&str, &[String]>,
+    id: &str,
+    path: &mut HashSet<String>,
+) -> usize {
+    if path.contains(id) {
+        return 0; // cycle — treat as leaf
+    }
+    let deps = match dep_map.get(id) {
+        Some(d) => *d,
+        None => return 0,
+    };
+    if deps.is_empty() {
+        return 0;
+    }
+    path.insert(id.to_string());
+    let h = deps
+        .iter()
+        .map(|d| subtree_height(dep_map, d.as_str(), path))
+        .max()
+        .unwrap_or(0);
+    path.remove(id);
+    h + 1
+}
+
+/// Build full tree (no dedup). Cycles are marked with `[cycle]` suffix.
+fn build_full_subtree(
+    ticket_map: &HashMap<&str, &Ticket>,
+    dep_map: &HashMap<&str, &[String]>,
+    id: &str,
+    path: &mut HashSet<String>,
+) -> TreeNode {
+    if path.contains(id) {
+        let (status, title) = ticket_status_title(ticket_map, id);
+        return TreeNode {
+            id: id.to_string(),
+            status,
+            title: format!("{} [cycle]", title),
+            deps: vec![],
+        };
+    }
+
+    let (status, title, dep_ids) = match ticket_map.get(id) {
+        Some(t) => (t.status.clone(), t.title.clone(), t.deps.clone()),
+        None => {
+            return TreeNode {
+                id: id.to_string(),
+                status: Status::Open,
+                title: "<missing> [missing]".to_string(),
+                deps: vec![],
+            };
+        }
+    };
+
+    // Compute sort keys (subtree heights) for children using fresh paths
+    let mut dep_order: Vec<(String, usize)> = dep_ids
+        .iter()
+        .map(|d| (d.clone(), subtree_height(dep_map, d, &mut HashSet::new())))
+        .collect();
+    dep_order.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+
+    path.insert(id.to_string());
+    let deps: Vec<TreeNode> = dep_order
+        .iter()
+        .map(|(dep_id, _)| build_full_subtree(ticket_map, dep_map, dep_id, path))
+        .collect();
+    path.remove(id);
+
+    TreeNode {
+        id: id.to_string(),
+        status,
+        title,
+        deps,
+    }
+}
+
+/// Build deduplicated tree. Each node appears once, at its deepest position.
+fn build_dedup_subtree(
+    ticket_map: &HashMap<&str, &Ticket>,
+    dep_map: &HashMap<&str, &[String]>,
+    id: &str,
+    depth: usize,
+    path: &mut HashSet<String>,
+    max_depth: &HashMap<String, usize>,
+    claimed: &mut HashSet<String>,
+) -> TreeNode {
+    if path.contains(id) {
+        // Safety net for cycles that slipped through the max_depth filter
+        let (status, title) = ticket_status_title(ticket_map, id);
+        return TreeNode {
+            id: id.to_string(),
+            status,
+            title: format!("{} [cycle]", title),
+            deps: vec![],
+        };
+    }
+
+    let (status, title, dep_ids) = match ticket_map.get(id) {
+        Some(t) => (t.status.clone(), t.title.clone(), t.deps.clone()),
+        None => {
+            return TreeNode {
+                id: id.to_string(),
+                status: Status::Open,
+                title: "<missing> [missing]".to_string(),
+                deps: vec![],
+            };
+        }
+    };
+
+    // Include a child Y only if it sits at its maximum depth (== depth+1) and isn't claimed yet.
+    let target_child_depth = depth + 1;
+    let mut dep_order: Vec<(String, usize)> = dep_ids
+        .iter()
+        .filter(|dep_id| {
+            let dep_max = max_depth
+                .get(dep_id.as_str())
+                .copied()
+                .unwrap_or(target_child_depth);
+            dep_max == target_child_depth && !claimed.contains(dep_id.as_str())
+        })
+        .map(|dep_id| {
+            let h = subtree_height(dep_map, dep_id, &mut HashSet::new());
+            (dep_id.clone(), h)
+        })
+        .collect();
+
+    dep_order.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+
+    // Claim all selected children before recursing so sibling subtrees can't claim them.
+    for (dep_id, _) in &dep_order {
+        claimed.insert(dep_id.clone());
+    }
+
+    path.insert(id.to_string());
+    let deps: Vec<TreeNode> = dep_order
+        .iter()
+        .map(|(dep_id, _)| {
+            build_dedup_subtree(ticket_map, dep_map, dep_id, target_child_depth, path, max_depth, claimed)
+        })
+        .collect();
+    path.remove(id);
+
+    TreeNode {
+        id: id.to_string(),
+        status,
+        title,
+        deps,
+    }
+}
+
+/// Return (status, title) for a ticket; placeholder values if ticket is missing.
+fn ticket_status_title(ticket_map: &HashMap<&str, &Ticket>, id: &str) -> (Status, String) {
+    match ticket_map.get(id) {
+        Some(t) => (t.status.clone(), t.title.clone()),
+        None => (Status::Open, format!("<missing>")),
+    }
+}
 
 /// Check whether adding a dependency from `from` to `to` would create a cycle.
 /// Returns `Some(cycle_path)` if a cycle would be created, `None` otherwise.
@@ -201,5 +428,104 @@ mod tests {
             assert!(t.blocks.is_empty());
             assert!(t.children.is_empty());
         }
+    }
+
+    // ── build_dep_tree unit tests ────────────────────────────────────────────
+
+    #[test]
+    fn tree_children_sorted_by_subtree_depth_asc_then_id() {
+        // A depends on B (leaf) and C (which depends on D, E — subtree height 1)
+        // and Z (which depends on M which depends on N — subtree height 2)
+        // Expected sort order: B (height 0) < C (height 1) < Z (height 2)
+        let tickets = vec![
+            make_ticket("A", vec!["Z", "B", "C"], None),
+            make_ticket("B", vec![], None),
+            make_ticket("C", vec!["D"], None),
+            make_ticket("D", vec![], None),
+            make_ticket("Z", vec!["M"], None),
+            make_ticket("M", vec!["N"], None),
+            make_ticket("N", vec![], None),
+        ];
+        let tree = build_dep_tree(&tickets, "A", true).unwrap();
+        let child_ids: Vec<&str> = tree.deps.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(child_ids, vec!["B", "C", "Z"]);
+    }
+
+    #[test]
+    fn tree_children_sort_by_id_when_same_height() {
+        // A depends on C and B, both leaves (height 0). B < C alphabetically.
+        let tickets = vec![
+            make_ticket("A", vec!["C", "B"], None),
+            make_ticket("B", vec![], None),
+            make_ticket("C", vec![], None),
+        ];
+        let tree = build_dep_tree(&tickets, "A", true).unwrap();
+        let child_ids: Vec<&str> = tree.deps.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(child_ids, vec!["B", "C"]);
+    }
+
+    #[test]
+    fn tree_root_not_found_returns_error() {
+        let tickets = vec![make_ticket("A", vec![], None)];
+        let result = build_dep_tree(&tickets, "nonexistent", false);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), "not_found");
+    }
+
+    #[test]
+    fn tree_full_mode_shows_all_occurrences() {
+        // Diamond: A→B, A→C, B→D, C→D — full mode should show D twice
+        let tickets = vec![
+            make_ticket("A", vec!["B", "C"], None),
+            make_ticket("B", vec!["D"], None),
+            make_ticket("C", vec!["D"], None),
+            make_ticket("D", vec![], None),
+        ];
+        let tree = build_dep_tree(&tickets, "A", true).unwrap();
+        fn count_id(node: &TreeNode, id: &str) -> usize {
+            let n = if node.id == id { 1 } else { 0 };
+            n + node.deps.iter().map(|c| count_id(c, id)).sum::<usize>()
+        }
+        assert_eq!(count_id(&tree, "D"), 2);
+    }
+
+    #[test]
+    fn tree_dedup_mode_shows_each_node_once() {
+        // Diamond: D should appear once
+        let tickets = vec![
+            make_ticket("A", vec!["B", "C"], None),
+            make_ticket("B", vec!["D"], None),
+            make_ticket("C", vec!["D"], None),
+            make_ticket("D", vec![], None),
+        ];
+        let tree = build_dep_tree(&tickets, "A", false).unwrap();
+        fn count_id(node: &TreeNode, id: &str) -> usize {
+            let n = if node.id == id { 1 } else { 0 };
+            n + node.deps.iter().map(|c| count_id(c, id)).sum::<usize>()
+        }
+        assert_eq!(count_id(&tree, "D"), 1);
+    }
+
+    #[test]
+    fn tree_cycle_in_data_adds_cycle_marker_no_infinite_loop() {
+        // Manually create a cycle: A→B→A (bypass would_create_cycle)
+        let tickets = vec![
+            make_ticket("A", vec!["B"], None),
+            make_ticket("B", vec!["A"], None),
+        ];
+        let tree = build_dep_tree(&tickets, "A", true).unwrap();
+        fn has_cycle_marker(node: &TreeNode) -> bool {
+            node.title.contains("[cycle]") || node.deps.iter().any(has_cycle_marker)
+        }
+        assert!(has_cycle_marker(&tree));
+    }
+
+    #[test]
+    fn tree_missing_dep_adds_missing_marker() {
+        let tickets = vec![make_ticket("A", vec!["ghost"], None)];
+        let tree = build_dep_tree(&tickets, "A", false).unwrap();
+        assert_eq!(tree.deps.len(), 1);
+        assert_eq!(tree.deps[0].id, "ghost");
+        assert!(tree.deps[0].title.contains("[missing]"));
     }
 }

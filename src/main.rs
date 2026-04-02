@@ -320,6 +320,16 @@ fn cmd_undep(args: cli::UndepArgs, exact: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_dep_tree(args: cli::TreeArgs, exact: bool) -> Result<()> {
+    let st = store::Store::open()?;
+    let id = st.resolve_id(&args.id, exact)?;
+    let tickets = st.read_all()?;
+    let tree = deps::build_dep_tree(&tickets, &id, args.full)?;
+    let value = serde_json::to_value(&tree)?;
+    println!("{}", value);
+    Ok(())
+}
+
 fn cmd_init(args: cli::InitArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let vima_dir = cwd.join(".vima");
@@ -365,7 +375,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::AddNote(args) => cmd_add_note(args, exact),
         Commands::Dep(dep_args) => match dep_args.command {
             cli::DepCommands::Add(add_args) => cmd_dep_add(add_args, exact),
-            cli::DepCommands::Tree(_) => Err(Error::InvalidField("not implemented: dep tree".into())),
+            cli::DepCommands::Tree(args) => cmd_dep_tree(args, exact),
             cli::DepCommands::Cycle => Err(Error::InvalidField("not implemented: dep cycle".into())),
         },
         Commands::Undep(args) => cmd_undep(args, exact),
@@ -1237,6 +1247,187 @@ mod tests {
         let st = store::Store::open().unwrap();
         let target = st.read_ticket("target-01").unwrap();
         assert!(target.deps.contains(&"blocker-01".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── dep tree command tests ───────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn dep_tree_linear_chain_a_b_c() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("tr-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("tr-b".to_string());
+        cmd_create(b, false).unwrap();
+
+        let mut c = create_args(Some("Ticket C"));
+        c.id = Some("tr-c".to_string());
+        cmd_create(c, false).unwrap();
+
+        cmd_dep_add(add_dep_args("tr-a", "tr-b", false), true).unwrap();
+        cmd_dep_add(add_dep_args("tr-b", "tr-c", false), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let tickets = st.read_all().unwrap();
+        let tree = deps::build_dep_tree(&tickets, "tr-a", false).unwrap();
+
+        assert_eq!(tree.id, "tr-a");
+        assert_eq!(tree.deps.len(), 1);
+        assert_eq!(tree.deps[0].id, "tr-b");
+        assert_eq!(tree.deps[0].deps.len(), 1);
+        assert_eq!(tree.deps[0].deps[0].id, "tr-c");
+        assert!(tree.deps[0].deps[0].deps.is_empty());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn dep_tree_diamond_dedup_d_appears_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        for id in &["td-a", "td-b", "td-c", "td-d"] {
+            let mut args = create_args(Some(&format!("Ticket {id}")));
+            args.id = Some(id.to_string());
+            cmd_create(args, false).unwrap();
+        }
+
+        // A→B, A→C, B→D, C→D
+        cmd_dep_add(add_dep_args("td-a", "td-b", false), true).unwrap();
+        cmd_dep_add(add_dep_args("td-a", "td-c", false), true).unwrap();
+        cmd_dep_add(add_dep_args("td-b", "td-d", false), true).unwrap();
+        cmd_dep_add(add_dep_args("td-c", "td-d", false), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let tickets = st.read_all().unwrap();
+        let tree = deps::build_dep_tree(&tickets, "td-a", false).unwrap();
+
+        // Count how many times td-d appears in the tree
+        fn count_id(node: &deps::TreeNode, id: &str) -> usize {
+            let self_count = if node.id == id { 1 } else { 0 };
+            self_count + node.deps.iter().map(|c| count_id(c, id)).sum::<usize>()
+        }
+
+        assert_eq!(count_id(&tree, "td-d"), 1, "td-d should appear exactly once");
+        // td-d must appear at depth 2 (under td-b or td-c, not directly under td-a)
+        assert!(
+            tree.deps.iter().any(|c| c.deps.iter().any(|gc| gc.id == "td-d")),
+            "td-d should be at depth 2"
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn dep_tree_diamond_full_d_appears_twice() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        for id in &["tf-a", "tf-b", "tf-c", "tf-d"] {
+            let mut args = create_args(Some(&format!("Ticket {id}")));
+            args.id = Some(id.to_string());
+            cmd_create(args, false).unwrap();
+        }
+
+        cmd_dep_add(add_dep_args("tf-a", "tf-b", false), true).unwrap();
+        cmd_dep_add(add_dep_args("tf-a", "tf-c", false), true).unwrap();
+        cmd_dep_add(add_dep_args("tf-b", "tf-d", false), true).unwrap();
+        cmd_dep_add(add_dep_args("tf-c", "tf-d", false), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let tickets = st.read_all().unwrap();
+        let tree = deps::build_dep_tree(&tickets, "tf-a", true).unwrap();
+
+        fn count_id(node: &deps::TreeNode, id: &str) -> usize {
+            let self_count = if node.id == id { 1 } else { 0 };
+            self_count + node.deps.iter().map(|c| count_id(c, id)).sum::<usize>()
+        }
+
+        assert_eq!(count_id(&tree, "tf-d"), 2, "tf-d should appear twice in full mode");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn dep_tree_dangling_dep_shows_missing_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        // Create ticket A and manually add a dep to a non-existent ticket
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("tm-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        // Manually inject a dangling dep by writing the ticket with a bad dep
+        let vima_dir = std::env::var("VIMA_DIR").unwrap();
+        let ticket_path = std::path::Path::new(&vima_dir).join("tickets/tm-a.md");
+        let content = std::fs::read_to_string(&ticket_path).unwrap();
+        // Add "ghost-id" to deps via a patched write
+        let patched = content.replace("deps: []", "deps:\n  - ghost-id");
+        std::fs::write(&ticket_path, patched).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let tickets = st.read_all().unwrap();
+        let tree = deps::build_dep_tree(&tickets, "tm-a", false).unwrap();
+
+        assert_eq!(tree.deps.len(), 1);
+        assert_eq!(tree.deps[0].id, "ghost-id");
+        assert!(
+            tree.deps[0].title.contains("[missing]"),
+            "expected [missing] in title, got: {}",
+            tree.deps[0].title
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn dep_tree_cycle_in_data_shows_cycle_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        // Create A and B, then manually inject a cycle A→B→A (bypassing cycle checks)
+        for id in &["tc-a", "tc-b"] {
+            let mut args = create_args(Some(&format!("Ticket {id}")));
+            args.id = Some(id.to_string());
+            cmd_create(args, false).unwrap();
+        }
+
+        let vima_dir = std::env::var("VIMA_DIR").unwrap();
+
+        // Inject A→B
+        let a_path = std::path::Path::new(&vima_dir).join("tickets/tc-a.md");
+        let content = std::fs::read_to_string(&a_path).unwrap();
+        let patched = content.replace("deps: []", "deps:\n  - tc-b");
+        std::fs::write(&a_path, patched).unwrap();
+
+        // Inject B→A (creating the cycle)
+        let b_path = std::path::Path::new(&vima_dir).join("tickets/tc-b.md");
+        let content = std::fs::read_to_string(&b_path).unwrap();
+        let patched = content.replace("deps: []", "deps:\n  - tc-a");
+        std::fs::write(&b_path, patched).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let tickets = st.read_all().unwrap();
+
+        // Must not hang or panic
+        let tree = deps::build_dep_tree(&tickets, "tc-a", true).unwrap();
+
+        fn has_cycle_marker(node: &deps::TreeNode) -> bool {
+            node.title.contains("[cycle]") || node.deps.iter().any(has_cycle_marker)
+        }
+        assert!(has_cycle_marker(&tree), "expected [cycle] marker in tree");
 
         std::env::remove_var("VIMA_DIR");
     }
