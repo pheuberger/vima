@@ -4,10 +4,11 @@ mod error;
 mod filter;
 mod id;
 mod output;
+mod plugin;
 mod store;
 mod ticket;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli::{Cli, Commands};
 use error::{Error, Result};
 
@@ -358,6 +359,24 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
     Ok(())
 }
 
+fn cmd_help() -> Result<()> {
+    let mut cmd = Cli::command();
+    cmd.print_help().map_err(|e| Error::InvalidField(e.to_string()))?;
+    println!();
+
+    let plugins = plugin::discover_plugins();
+    if !plugins.is_empty() {
+        println!("\nPlugin commands:");
+        for (name, desc) in &plugins {
+            match desc {
+                Some(d) => println!("  {}    {}", name, d),
+                None => println!("  {}", name),
+            }
+        }
+    }
+    Ok(())
+}
+
 fn dispatch(cli: Cli) -> Result<()> {
     let exact = cli.exact;
     match cli.command {
@@ -382,8 +401,15 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Link(args) => cmd_link(args, exact),
         Commands::Unlink(args) => cmd_unlink(args, exact),
         Commands::Init(args) => cmd_init(args),
-        Commands::Help(_) => Err(Error::InvalidField("not implemented: help".into())),
-        Commands::External(args) => Err(Error::InvalidField(format!("not implemented: {}", args[0]))),
+        Commands::Help(_) => cmd_help(),
+        Commands::External(args) => {
+            let cmd = &args[0];
+            let plugin_args = args[1..].to_vec();
+            if plugin::try_plugin(cmd, &plugin_args).is_none() {
+                return Err(Error::InvalidField(format!("unknown command: {}", cmd)));
+            }
+            Ok(())
+        }
     }
 }
 
