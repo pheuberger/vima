@@ -9,7 +9,58 @@ use clap::Parser;
 use cli::{Cli, Commands};
 use error::{Error, Result};
 
-fn cmd_init() -> Result<()> {
+const CLAUDE_MD_CONTENT: &str = r#"# vima — ticket tracker
+
+`vima` is this project's ticket tracker. Tickets live in `.vima/tickets/`.
+
+## Common commands
+
+```
+vima create "Title" [-t task|bug|feature] [-p 0-4] [--dep ID] [--tags foo,bar]
+vima list [--tag foo] [--type bug] [--priority 0-2]
+vima ready                    # tickets with no open deps
+vima show ID
+vima update ID --title "..." --description "..."
+vima close ID [--reason "..."]
+vima start ID                 # set status → in_progress
+```
+
+## Output format
+
+All output is newline-delimited JSON (one object per line). Use `--pluck FIELD`
+to extract a single field and `--count` to get a count.
+
+```
+vima list --pluck id          # print IDs only
+vima list --count             # print number of open tickets
+```
+
+## Batch create with back-references
+
+```
+vima create --batch <<'EOF'
+[
+  {"title": "Task A", "id": "a"},
+  {"title": "Task B", "dep": ["a"]}
+]
+EOF
+```
+
+## Dependencies
+
+```
+vima dep add ID DEP_ID        # ID depends on DEP_ID
+vima dep add ID DEP_ID --blocks  # ID blocks DEP_ID
+vima is-ready ID              # exits 0 if ready, 1 if blocked
+```
+
+## Automation tips
+
+- Set `VIMA_EXACT=1` (or `--exact`) to disable partial ID matching.
+- All commands exit 0 on success, non-zero on error.
+"#;
+
+fn cmd_init(args: cli::InitArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let vima_dir = cwd.join(".vima");
     let tickets_dir = vima_dir.join("tickets");
@@ -20,6 +71,17 @@ fn cmd_init() -> Result<()> {
     if !config_path.exists() {
         let prefix = id::get_prefix(&cwd)?;
         std::fs::write(&config_path, format!("prefix: {}\n", prefix))?;
+    }
+
+    if args.with_instructions {
+        let claude_md = cwd.join("CLAUDE.md");
+        if claude_md.exists() {
+            return Err(Error::InvalidField(
+                "CLAUDE.md already exists — merge manually".into(),
+            ));
+        }
+        std::fs::write(&claude_md, CLAUDE_MD_CONTENT)?;
+        eprintln!("Created CLAUDE.md with vima usage instructions");
     }
 
     eprintln!("Initialized vima in .vima/");
@@ -44,7 +106,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Undep(_) => Err(Error::InvalidField("not implemented: undep".into())),
         Commands::Link(_) => Err(Error::InvalidField("not implemented: link".into())),
         Commands::Unlink(_) => Err(Error::InvalidField("not implemented: unlink".into())),
-        Commands::Init(_) => cmd_init(),
+        Commands::Init(args) => cmd_init(args),
         Commands::Help(_) => Err(Error::InvalidField("not implemented: help".into())),
         Commands::External(args) => Err(Error::InvalidField(format!("not implemented: {}", args[0]))),
     }
@@ -64,6 +126,10 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    fn init_args(with_instructions: bool) -> cli::InitArgs {
+        cli::InitArgs { with_instructions }
+    }
+
     #[test]
     #[serial(env)]
     fn init_creates_vima_directory_structure() {
@@ -71,7 +137,7 @@ mod tests {
         std::env::set_current_dir(tmp.path()).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init().unwrap();
+        cmd_init(init_args(false)).unwrap();
 
         assert!(tmp.path().join(".vima").is_dir());
         assert!(tmp.path().join(".vima/tickets").is_dir());
@@ -87,7 +153,7 @@ mod tests {
         std::env::set_current_dir(&project_dir).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init().unwrap();
+        cmd_init(init_args(false)).unwrap();
 
         let config = std::fs::read_to_string(project_dir.join(".vima/config.yml")).unwrap();
         assert!(config.contains("prefix: mp"), "config was: {config}");
@@ -100,13 +166,13 @@ mod tests {
         std::env::set_current_dir(tmp.path()).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init().unwrap();
+        cmd_init(init_args(false)).unwrap();
 
         // Overwrite config with custom prefix
         std::fs::write(tmp.path().join(".vima/config.yml"), "prefix: custom\n").unwrap();
 
         // Run init again — must not overwrite config
-        cmd_init().unwrap();
+        cmd_init(init_args(false)).unwrap();
 
         let config = std::fs::read_to_string(tmp.path().join(".vima/config.yml")).unwrap();
         assert!(config.contains("prefix: custom"), "config was: {config}");
@@ -119,7 +185,61 @@ mod tests {
         std::env::set_current_dir(tmp.path()).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init().unwrap();
-        cmd_init().unwrap();
+        cmd_init(init_args(false)).unwrap();
+        cmd_init(init_args(false)).unwrap();
+    }
+
+    #[test]
+    #[serial(env)]
+    fn init_without_flag_does_not_create_claude_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        std::env::remove_var("VIMA_DIR");
+
+        cmd_init(init_args(false)).unwrap();
+
+        assert!(!tmp.path().join("CLAUDE.md").exists());
+    }
+
+    #[test]
+    #[serial(env)]
+    fn init_with_instructions_creates_claude_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        std::env::remove_var("VIMA_DIR");
+
+        cmd_init(init_args(true)).unwrap();
+
+        let claude_md = tmp.path().join("CLAUDE.md");
+        assert!(claude_md.exists());
+        let content = std::fs::read_to_string(&claude_md).unwrap();
+        assert!(content.contains("create"), "missing 'create': {content}");
+        assert!(content.contains("list"), "missing 'list': {content}");
+        assert!(content.contains("ready"), "missing 'ready': {content}");
+        assert!(content.contains("close"), "missing 'close': {content}");
+        assert!(content.contains("vima"), "missing 'vima': {content}");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn init_with_instructions_errors_if_claude_md_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        std::env::remove_var("VIMA_DIR");
+
+        let claude_md = tmp.path().join("CLAUDE.md");
+        std::fs::write(&claude_md, "existing content").unwrap();
+
+        let result = cmd_init(init_args(true));
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("CLAUDE.md already exists"),
+            "unexpected error: {err_msg}"
+        );
+
+        // File must be unchanged
+        let content = std::fs::read_to_string(&claude_md).unwrap();
+        assert_eq!(content, "existing content");
     }
 }
