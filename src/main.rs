@@ -369,6 +369,78 @@ fn cmd_update(args: cli::UpdateArgs, exact: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_start(args: cli::IdArgs, exact: bool) -> Result<()> {
+    let st = store::Store::open()?;
+    let resolved = st.resolve_id(&args.id, exact)?;
+    let mut ticket = st.read_ticket(&resolved)?;
+
+    if ticket.status == ticket::Status::InProgress {
+        let current = st.load_and_compute(&resolved)?;
+        output::output_one(&current, &None)?;
+        return Ok(());
+    }
+
+    ticket.status = ticket::Status::InProgress;
+    st.write_ticket(&ticket)?;
+    let updated = st.load_and_compute(&resolved)?;
+    eprintln!("Started {}", resolved);
+    output::output_one(&updated, &None)?;
+
+    Ok(())
+}
+
+fn cmd_close(args: cli::CloseArgs, exact: bool) -> Result<()> {
+    let st = store::Store::open()?;
+    let mut closed_tickets = Vec::new();
+
+    for raw_id in &args.ids {
+        let resolved = st.resolve_id(raw_id, exact)?;
+        let mut ticket = st.read_ticket(&resolved)?;
+
+        if ticket.status == ticket::Status::Closed {
+            let current = st.load_and_compute(&resolved)?;
+            closed_tickets.push(current);
+            continue;
+        }
+
+        ticket.status = ticket::Status::Closed;
+        if let Some(ref reason) = args.reason {
+            ticket.notes.push(ticket::Note {
+                timestamp: jiff::Timestamp::now().to_string(),
+                text: reason.clone(),
+            });
+        }
+        st.write_ticket(&ticket)?;
+        let updated = st.load_and_compute(&resolved)?;
+        eprintln!("Closed {}", resolved);
+        closed_tickets.push(updated);
+    }
+
+    println!("{}", serde_json::to_string(&closed_tickets)?);
+
+    Ok(())
+}
+
+fn cmd_reopen(args: cli::IdArgs, exact: bool) -> Result<()> {
+    let st = store::Store::open()?;
+    let resolved = st.resolve_id(&args.id, exact)?;
+    let mut ticket = st.read_ticket(&resolved)?;
+
+    if ticket.status == ticket::Status::Open {
+        let current = st.load_and_compute(&resolved)?;
+        output::output_one(&current, &None)?;
+        return Ok(());
+    }
+
+    ticket.status = ticket::Status::Open;
+    st.write_ticket(&ticket)?;
+    let updated = st.load_and_compute(&resolved)?;
+    eprintln!("Reopened {}", resolved);
+    output::output_one(&updated, &None)?;
+
+    Ok(())
+}
+
 fn cmd_dep_tree(args: cli::TreeArgs, exact: bool) -> Result<()> {
     let st = store::Store::open()?;
     let id = st.resolve_id(&args.id, exact)?;
@@ -434,9 +506,9 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Blocked(_) => Err(Error::InvalidField("not implemented: blocked".into())),
         Commands::Closed(_) => Err(Error::InvalidField("not implemented: closed".into())),
         Commands::Update(args) => cmd_update(args, exact),
-        Commands::Start(_) => Err(Error::InvalidField("not implemented: start".into())),
-        Commands::Close(_) => Err(Error::InvalidField("not implemented: close".into())),
-        Commands::Reopen(_) => Err(Error::InvalidField("not implemented: reopen".into())),
+        Commands::Start(args) => cmd_start(args, exact),
+        Commands::Close(args) => cmd_close(args, exact),
+        Commands::Reopen(args) => cmd_reopen(args, exact),
         Commands::IsReady(_) => Err(Error::InvalidField("not implemented: is-ready".into())),
         Commands::AddNote(args) => cmd_add_note(args, exact),
         Commands::Dep(dep_args) => match dep_args.command {
@@ -1690,6 +1762,216 @@ mod tests {
         ua.title = Some("Updated title".to_string());
         let result = cmd_update(ua, true);
         assert!(result.is_ok(), "update should succeed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    fn start_args(id: &str) -> cli::IdArgs {
+        cli::IdArgs { id: id.to_string() }
+    }
+
+    fn close_args(ids: Vec<&str>) -> cli::CloseArgs {
+        cli::CloseArgs {
+            ids: ids.iter().map(|s| s.to_string()).collect(),
+            reason: None,
+        }
+    }
+
+    fn reopen_args(id: &str) -> cli::IdArgs {
+        cli::IdArgs { id: id.to_string() }
+    }
+
+    #[test]
+    #[serial(env)]
+    fn start_sets_status_to_in_progress() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Start test"));
+        ca.id = Some("st-01".to_string());
+        cmd_create(ca, false).unwrap();
+
+        cmd_start(start_args("st-01"), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("st-01").unwrap();
+        assert_eq!(ticket.status, ticket::Status::InProgress);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn start_on_in_progress_ticket_is_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Start noop"));
+        ca.id = Some("st-02".to_string());
+        cmd_create(ca, false).unwrap();
+
+        cmd_start(start_args("st-02"), true).unwrap();
+        let result = cmd_start(start_args("st-02"), true);
+        assert!(result.is_ok(), "second start should succeed: {:?}", result);
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("st-02").unwrap();
+        assert_eq!(ticket.status, ticket::Status::InProgress);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn close_sets_status_to_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Close test"));
+        ca.id = Some("cl-01".to_string());
+        cmd_create(ca, false).unwrap();
+
+        cmd_close(close_args(vec!["cl-01"]), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("cl-01").unwrap();
+        assert_eq!(ticket.status, ticket::Status::Closed);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn close_with_reason_appends_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Close reason test"));
+        ca.id = Some("cl-02".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut args = close_args(vec!["cl-02"]);
+        args.reason = Some("Done".to_string());
+        cmd_close(args, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("cl-02").unwrap();
+        assert_eq!(ticket.status, ticket::Status::Closed);
+        assert_eq!(ticket.notes.len(), 1);
+        assert_eq!(ticket.notes[0].text, "Done");
+        assert!(!ticket.notes[0].timestamp.is_empty());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn close_on_already_closed_is_noop_no_duplicate_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Close noop"));
+        ca.id = Some("cl-03".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut args1 = close_args(vec!["cl-03"]);
+        args1.reason = Some("First close".to_string());
+        cmd_close(args1, true).unwrap();
+
+        let mut args2 = close_args(vec!["cl-03"]);
+        args2.reason = Some("Second close".to_string());
+        let result = cmd_close(args2, true);
+        assert!(result.is_ok(), "second close should succeed: {:?}", result);
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("cl-03").unwrap();
+        assert_eq!(ticket.status, ticket::Status::Closed);
+        assert_eq!(ticket.notes.len(), 1, "no duplicate note should be added");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn close_multiple_ids_returns_json_array() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca1 = create_args(Some("Close multi A"));
+        ca1.id = Some("cl-04".to_string());
+        cmd_create(ca1, false).unwrap();
+
+        let mut ca2 = create_args(Some("Close multi B"));
+        ca2.id = Some("cl-05".to_string());
+        cmd_create(ca2, false).unwrap();
+
+        cmd_close(close_args(vec!["cl-04", "cl-05"]), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let t1 = st.read_ticket("cl-04").unwrap();
+        let t2 = st.read_ticket("cl-05").unwrap();
+        assert_eq!(t1.status, ticket::Status::Closed);
+        assert_eq!(t2.status, ticket::Status::Closed);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn reopen_sets_status_to_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Reopen test"));
+        ca.id = Some("ro-01".to_string());
+        cmd_create(ca, false).unwrap();
+
+        cmd_close(close_args(vec!["ro-01"]), true).unwrap();
+        cmd_reopen(reopen_args("ro-01"), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("ro-01").unwrap();
+        assert_eq!(ticket.status, ticket::Status::Open);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn reopen_on_open_ticket_is_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Reopen noop"));
+        ca.id = Some("ro-02".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let result = cmd_reopen(reopen_args("ro-02"), true);
+        assert!(result.is_ok(), "reopen of open ticket should succeed: {:?}", result);
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("ro-02").unwrap();
+        assert_eq!(ticket.status, ticket::Status::Open);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn reopen_from_in_progress_sets_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Reopen from in_progress"));
+        ca.id = Some("ro-03".to_string());
+        cmd_create(ca, false).unwrap();
+
+        cmd_start(start_args("ro-03"), true).unwrap();
+        cmd_reopen(reopen_args("ro-03"), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("ro-03").unwrap();
+        assert_eq!(ticket.status, ticket::Status::Open);
 
         std::env::remove_var("VIMA_DIR");
     }
