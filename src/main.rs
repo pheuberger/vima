@@ -326,8 +326,7 @@ fn cmd_dep_tree(args: cli::TreeArgs, exact: bool) -> Result<()> {
     let id = st.resolve_id(&args.id, exact)?;
     let tickets = st.read_all()?;
     let tree = deps::build_dep_tree(&tickets, &id, args.full)?;
-    let value = serde_json::to_value(&tree)?;
-    println!("{}", value);
+    println!("{}", serde_json::to_string(&tree)?);
     Ok(())
 }
 
@@ -404,8 +403,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Help(_) => cmd_help(),
         Commands::External(args) => {
             let cmd = &args[0];
-            let plugin_args = args[1..].to_vec();
-            if plugin::try_plugin(cmd, &plugin_args).is_none() {
+            if plugin::try_plugin(cmd, &args[1..]).is_none() {
                 return Err(Error::InvalidField(format!("unknown command: {}", cmd)));
             }
             Ok(())

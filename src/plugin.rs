@@ -81,7 +81,7 @@ fn read_plugin_description(path: &Path) -> Option<String> {
     let file = std::fs::File::open(path).ok()?;
     let reader = std::io::BufReader::new(file);
     for line in reader.lines().take(10) {
-        let line = line.ok()?;
+        let Ok(line) = line else { continue };
         if let Some(desc) = line.strip_prefix("# vima-plugin: ") {
             return Some(desc.trim().to_string());
         }

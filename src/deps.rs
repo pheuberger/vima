@@ -104,25 +104,12 @@ fn build_full_subtree(
     path: &mut HashSet<String>,
 ) -> TreeNode {
     if path.contains(id) {
-        let (status, title) = ticket_status_title(ticket_map, id);
-        return TreeNode {
-            id: id.to_string(),
-            status,
-            title: format!("{} [cycle]", title),
-            deps: vec![],
-        };
+        return cycle_node(ticket_map, id);
     }
 
     let (status, title, dep_ids) = match ticket_map.get(id) {
         Some(t) => (t.status.clone(), t.title.clone(), t.deps.clone()),
-        None => {
-            return TreeNode {
-                id: id.to_string(),
-                status: Status::Open,
-                title: "<missing> [missing]".to_string(),
-                deps: vec![],
-            };
-        }
+        None => return missing_node(id),
     };
 
     // Compute sort keys (subtree heights) for children using fresh paths
@@ -158,26 +145,12 @@ fn build_dedup_subtree(
     claimed: &mut HashSet<String>,
 ) -> TreeNode {
     if path.contains(id) {
-        // Safety net for cycles that slipped through the max_depth filter
-        let (status, title) = ticket_status_title(ticket_map, id);
-        return TreeNode {
-            id: id.to_string(),
-            status,
-            title: format!("{} [cycle]", title),
-            deps: vec![],
-        };
+        return cycle_node(ticket_map, id);
     }
 
     let (status, title, dep_ids) = match ticket_map.get(id) {
         Some(t) => (t.status.clone(), t.title.clone(), t.deps.clone()),
-        None => {
-            return TreeNode {
-                id: id.to_string(),
-                status: Status::Open,
-                title: "<missing> [missing]".to_string(),
-                deps: vec![],
-            };
-        }
+        None => return missing_node(id),
     };
 
     // Include a child Y only if it sits at its maximum depth (== depth+1) and isn't claimed yet.
@@ -225,7 +198,26 @@ fn build_dedup_subtree(
 fn ticket_status_title(ticket_map: &HashMap<&str, &Ticket>, id: &str) -> (Status, String) {
     match ticket_map.get(id) {
         Some(t) => (t.status.clone(), t.title.clone()),
-        None => (Status::Open, format!("<missing>")),
+        None => (Status::Open, "<missing>".to_string()),
+    }
+}
+
+fn cycle_node(ticket_map: &HashMap<&str, &Ticket>, id: &str) -> TreeNode {
+    let (status, title) = ticket_status_title(ticket_map, id);
+    TreeNode {
+        id: id.to_string(),
+        status,
+        title: format!("{} [cycle]", title),
+        deps: vec![],
+    }
+}
+
+fn missing_node(id: &str) -> TreeNode {
+    TreeNode {
+        id: id.to_string(),
+        status: Status::Open,
+        title: "<missing> [missing]".to_string(),
+        deps: vec![],
     }
 }
 
