@@ -94,43 +94,19 @@ impl From<serde_json::Error> for Error {
 pub fn log_error(err: &Error) {
     use std::io::Write;
 
-    let json = match err {
+    let code = err.code();
+    let message = err.to_string();
+
+    let mut json = serde_json::json!({"error": code, "message": message});
+    match err {
         Error::AmbiguousId(_, matches) => {
-            serde_json::json!({
-                "error": err.code(),
-                "message": err.to_string(),
-                "matches": matches,
-            })
+            json["matches"] = serde_json::json!(matches);
         }
         Error::Cycle(path) => {
-            serde_json::json!({
-                "error": err.code(),
-                "message": err.to_string(),
-                "cycle": path,
-            })
+            json["cycle"] = serde_json::json!(path);
         }
-        Error::NotFound(_) => {
-            serde_json::json!({"error": err.code(), "message": err.to_string()})
-        }
-        Error::InvalidBackref(_) => {
-            serde_json::json!({"error": err.code(), "message": err.to_string()})
-        }
-        Error::IdExists(_) => {
-            serde_json::json!({"error": err.code(), "message": err.to_string()})
-        }
-        Error::InvalidField(_) => {
-            serde_json::json!({"error": err.code(), "message": err.to_string()})
-        }
-        Error::NoVimaDir => {
-            serde_json::json!({"error": err.code(), "message": err.to_string()})
-        }
-        Error::IoError(_) => {
-            serde_json::json!({"error": err.code(), "message": err.to_string()})
-        }
-        Error::YamlError(_) => {
-            serde_json::json!({"error": err.code(), "message": err.to_string()})
-        }
-    };
+        _ => {}
+    }
 
     let stderr = std::io::stderr();
     let mut handle = stderr.lock();

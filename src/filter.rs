@@ -1,23 +1,8 @@
-use std::fmt;
 use crate::cli::FilterArgs;
+use crate::error::Error;
 use crate::ticket::{Status, Ticket, TicketType};
 
 const MAX_PRIORITY: u8 = 4;
-
-#[derive(Debug)]
-pub enum FilterError {
-    InvalidField(String),
-}
-
-impl fmt::Display for FilterError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FilterError::InvalidField(msg) => write!(f, "invalid field: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for FilterError {}
 
 pub struct Filter {
     pub status: Option<Status>,
@@ -56,7 +41,7 @@ impl Filter {
         true
     }
 
-    pub fn from_args(args: &FilterArgs) -> Result<Filter, FilterError> {
+    pub fn from_args(args: &FilterArgs) -> Result<Filter, Error> {
         let priority_range = args.priority.as_deref().map(parse_priority_range).transpose()?;
         Ok(Filter {
             status: args.status.clone(),
@@ -69,15 +54,15 @@ impl Filter {
     }
 }
 
-pub fn parse_priority_range(s: &str) -> Result<(u8, u8), FilterError> {
+pub fn parse_priority_range(s: &str) -> Result<(u8, u8), Error> {
     match s.split_once('-') {
         None => {
             let n: u8 = s
                 .trim()
                 .parse()
-                .map_err(|_| FilterError::InvalidField(format!("invalid priority: {}", s)))?;
+                .map_err(|_| Error::InvalidField(format!("invalid priority: {}", s)))?;
             if n > MAX_PRIORITY {
-                return Err(FilterError::InvalidField(format!(
+                return Err(Error::InvalidField(format!(
                     "priority {} out of range (max {})",
                     n, MAX_PRIORITY
                 )));
@@ -88,19 +73,19 @@ pub fn parse_priority_range(s: &str) -> Result<(u8, u8), FilterError> {
             let lo: u8 = lo_str
                 .trim()
                 .parse()
-                .map_err(|_| FilterError::InvalidField(format!("invalid priority range: {}", s)))?;
+                .map_err(|_| Error::InvalidField(format!("invalid priority range: {}", s)))?;
             let hi: u8 = hi_str
                 .trim()
                 .parse()
-                .map_err(|_| FilterError::InvalidField(format!("invalid priority range: {}", s)))?;
+                .map_err(|_| Error::InvalidField(format!("invalid priority range: {}", s)))?;
             if lo > hi {
-                return Err(FilterError::InvalidField(format!(
+                return Err(Error::InvalidField(format!(
                     "priority range lo ({}) > hi ({})",
                     lo, hi
                 )));
             }
             if hi > MAX_PRIORITY {
-                return Err(FilterError::InvalidField(format!(
+                return Err(Error::InvalidField(format!(
                     "priority hi {} out of range (max {})",
                     hi, MAX_PRIORITY
                 )));
