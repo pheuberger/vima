@@ -285,17 +285,16 @@ pub fn would_create_cycle(tickets: &[Ticket], from: &str, to: &str) -> Option<Ve
 /// Returns a deduplicated list of cycles, each normalized so the lexicographically
 /// smallest ID appears first.
 pub fn detect_all_cycles(tickets: &[Ticket]) -> Vec<Vec<String>> {
-    // Filter to non-closed tickets only
-    let open_tickets: Vec<&Ticket> = tickets
+    let open_ids: HashSet<&str> = tickets
         .iter()
         .filter(|t| t.status != Status::Closed)
+        .map(|t| t.id.as_str())
         .collect();
 
-    let open_ids: HashSet<&str> = open_tickets.iter().map(|t| t.id.as_str()).collect();
-
     // Build adjacency list (only edges to other open tickets)
-    let dep_map: HashMap<&str, Vec<&str>> = open_tickets
+    let dep_map: HashMap<&str, Vec<&str>> = tickets
         .iter()
+        .filter(|t| t.status != Status::Closed)
         .map(|t| {
             let deps: Vec<&str> = t
                 .deps
