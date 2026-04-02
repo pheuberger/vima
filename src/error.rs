@@ -91,9 +91,7 @@ impl From<serde_json::Error> for Error {
     }
 }
 
-pub fn log_error(err: &Error) {
-    use std::io::Write;
-
+pub fn error_json(err: &Error) -> serde_json::Value {
     let code = err.code();
     let message = err.to_string();
 
@@ -105,9 +103,20 @@ pub fn log_error(err: &Error) {
         Error::Cycle(path) => {
             json["cycle"] = serde_json::json!(path);
         }
-        _ => {}
+        Error::NotFound(_) => {}
+        Error::InvalidBackref(_) => {}
+        Error::IdExists(_) => {}
+        Error::InvalidField(_) => {}
+        Error::NoVimaDir => {}
+        Error::IoError(_) => {}
+        Error::YamlError(_) => {}
     }
+    json
+}
 
+pub fn log_error(err: &Error) {
+    use std::io::Write;
+    let json = error_json(err);
     let stderr = std::io::stderr();
     let mut handle = stderr.lock();
     let _ = writeln!(handle, "{}", json);
@@ -166,14 +175,8 @@ mod tests {
 
     #[test]
     fn log_error_ambiguous_id_contains_matches() {
-        // We can't easily capture stderr in a unit test, but we can verify
-        // that the JSON serialization logic produces the right structure.
         let err = Error::AmbiguousId("x".into(), vec!["a".into(), "b".into()]);
-        let json = serde_json::json!({
-            "error": err.code(),
-            "message": err.to_string(),
-            "matches": ["a", "b"],
-        });
+        let json = error_json(&err);
         assert_eq!(json["matches"], serde_json::json!(["a", "b"]));
         assert_eq!(json["error"], "ambiguous_id");
     }

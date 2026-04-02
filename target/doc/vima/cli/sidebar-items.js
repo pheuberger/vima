@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Commands","DepCommands"],"struct":["AddDepArgs","AddNoteArgs","Cli","CloseArgs","ClosedArgs","CreateArgs","DepArgs","FilterArgs","HelpArgs","IdArgs","InitArgs","LinkArgs","ShowArgs","TreeArgs","UndepArgs","UpdateArgs"]};
