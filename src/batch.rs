@@ -73,14 +73,6 @@ pub fn resolve_value_backrefs(
     Ok(())
 }
 
-fn parse_tags(input: &str) -> Vec<String> {
-    input
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 fn get_string_array(spec: &serde_json::Value, field: &str) -> Vec<String> {
     match spec.get(field) {
         Some(serde_json::Value::String(s)) => vec![s.clone()],
@@ -128,14 +120,12 @@ pub fn create_from_spec(
     created_ids: &[String],
     exact: bool,
 ) -> Result<Ticket> {
-    // title (required)
     let title = spec
         .get("title")
         .and_then(|v| v.as_str())
         .ok_or_else(|| Error::InvalidField("title is required".into()))?
         .to_string();
 
-    // priority
     let priority = if let Some(p) = spec.get("priority") {
         let p = p
             .as_u64()
@@ -151,7 +141,6 @@ pub fn create_from_spec(
         2
     };
 
-    // type
     let ticket_type = if let Some(t) = spec.get("type") {
         serde_json::from_value::<ticket::TicketType>(t.clone())
             .map_err(|_| Error::InvalidField(format!("unknown ticket type: {}", t)))?
@@ -159,9 +148,8 @@ pub fn create_from_spec(
         ticket::TicketType::Task
     };
 
-    // tags
     let tags: Vec<String> = match spec.get("tags") {
-        Some(serde_json::Value::String(s)) => parse_tags(s),
+        Some(serde_json::Value::String(s)) => crate::parse_tags(s),
         Some(serde_json::Value::Array(arr)) => arr
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
@@ -207,7 +195,6 @@ pub fn create_from_spec(
         None => None,
     };
 
-    // ID
     let tickets_dir = store.tickets_dir().to_path_buf();
     let ticket_id = if let Some(id_str) = spec.get("id").and_then(|v| v.as_str()) {
         id::validate_id(id_str)?;
@@ -316,23 +303,28 @@ fn batch_create_reader<R: BufRead>(store: &Store, reader: R, exact: bool) -> Res
 
         // Handle "blocks": add ticket_id to each target's deps
         let blocks = get_string_array(&spec, "blocks");
-        for block_target in &blocks {
-            // Cycle check: does adding ticket_id as a dep of block_target create a cycle?
+        if !blocks.is_empty() {
+            // Read once for all cycle checks on this line's block targets.
+            // Re-reading after each add_dep is unnecessary: the newly added edges
+            // (target → ticket_id) cannot affect cycle detection for other targets
+            // because ticket_id's spec deps are immutable and were already checked.
             let tickets = store
                 .read_all()
                 .map_err(|e| wrap_batch_error(line_num, e, &created_ids))?;
-            if let Some(cycle_path) =
-                deps::would_create_cycle(&tickets, block_target, &ticket_id)
-            {
-                return Err(wrap_batch_error(
-                    line_num,
-                    Error::Cycle(cycle_path),
-                    &created_ids,
-                ));
+            for block_target in &blocks {
+                if let Some(cycle_path) =
+                    deps::would_create_cycle(&tickets, block_target, &ticket_id)
+                {
+                    return Err(wrap_batch_error(
+                        line_num,
+                        Error::Cycle(cycle_path),
+                        &created_ids,
+                    ));
+                }
+                store
+                    .add_dep(block_target, &ticket_id)
+                    .map_err(|e| wrap_batch_error(line_num, e, &created_ids))?;
             }
-            store
-                .add_dep(block_target, &ticket_id)
-                .map_err(|e| wrap_batch_error(line_num, e, &created_ids))?;
         }
 
         created_ids.push(ticket_id);

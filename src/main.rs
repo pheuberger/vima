@@ -64,7 +64,7 @@ vima is-ready ID              # exits 0 if ready, 1 if blocked
 - All commands exit 0 on success, non-zero on error.
 "#;
 
-fn parse_tags(input: &str) -> Vec<String> {
+pub(crate) fn parse_tags(input: &str) -> Vec<String> {
     input
         .split(',')
         .map(|s| s.trim().to_string())
@@ -519,22 +519,20 @@ fn cmd_closed(args: cli::ClosedArgs) -> Result<()> {
     let mut filtered: Vec<ticket::Ticket> =
         tickets.into_iter().filter(|t| filter.matches(t)).collect();
 
-    // Sort by mtime DESC
-    filtered.sort_by(|a, b| {
-        let mtime_a = st
-            .tickets_dir()
-            .join(format!("{}.md", a.id))
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok();
-        let mtime_b = st
-            .tickets_dir()
-            .join(format!("{}.md", b.id))
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok();
-        mtime_b.cmp(&mtime_a)
-    });
+    // Sort by mtime DESC — pre-collect to avoid O(n log n) filesystem calls
+    let tickets_dir = st.tickets_dir();
+    let mtimes: std::collections::HashMap<String, Option<std::time::SystemTime>> = filtered
+        .iter()
+        .map(|t| {
+            let mtime = tickets_dir
+                .join(format!("{}.md", t.id))
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok();
+            (t.id.clone(), mtime)
+        })
+        .collect();
+    filtered.sort_by(|a, b| mtimes[&b.id].cmp(&mtimes[&a.id]));
 
     // Apply limit
     if let Some(limit) = filter.limit {
@@ -544,16 +542,20 @@ fn cmd_closed(args: cli::ClosedArgs) -> Result<()> {
     output::output_many(&filtered, &args.filter.pluck, args.filter.count)
 }
 
+fn closed_id_set(tickets: &[ticket::Ticket]) -> std::collections::HashSet<String> {
+    tickets
+        .iter()
+        .filter(|t| t.status == ticket::Status::Closed)
+        .map(|t| t.id.clone())
+        .collect()
+}
+
 fn cmd_ready(args: cli::FilterArgs) -> Result<()> {
     let st = store::Store::open()?;
     let mut tickets = st.read_all()?;
     deps::compute_reverse_fields(&mut tickets);
 
-    let closed_ids: std::collections::HashSet<String> = tickets
-        .iter()
-        .filter(|t| t.status == ticket::Status::Closed)
-        .map(|t| t.id.clone())
-        .collect();
+    let closed_ids = closed_id_set(&tickets);
 
     // Keep only open/in_progress tickets where ALL deps are closed
     let candidates: Vec<ticket::Ticket> = tickets
@@ -577,11 +579,7 @@ fn cmd_blocked(args: cli::FilterArgs) -> Result<()> {
     let mut tickets = st.read_all()?;
     deps::compute_reverse_fields(&mut tickets);
 
-    let closed_ids: std::collections::HashSet<String> = tickets
-        .iter()
-        .filter(|t| t.status == ticket::Status::Closed)
-        .map(|t| t.id.clone())
-        .collect();
+    let closed_ids = closed_id_set(&tickets);
 
     // Keep only open/in_progress tickets where ANY dep is NOT closed
     let candidates: Vec<ticket::Ticket> = tickets
