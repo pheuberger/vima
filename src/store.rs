@@ -5,7 +5,76 @@ use gray_matter::engine::YAML;
 use gray_matter::Matter;
 
 use crate::error::{Error, Result};
-use crate::ticket::Ticket;
+use crate::ticket::{Note, Ticket};
+
+pub fn needs_quoting(s: &str) -> bool {
+    if s.is_empty() {
+        return true;
+    }
+    if s != s.trim() {
+        return true;
+    }
+    if s.contains('\t') {
+        return true;
+    }
+    let first = s.chars().next().unwrap();
+    if "-*&!|>%@`,[]{}#?'\"".contains(first) {
+        return true;
+    }
+    if s.contains(':') || s.contains('#') || s.contains('\n') || s.contains('"') || s.contains('\'') {
+        return true;
+    }
+    let lower = s.to_lowercase();
+    if matches!(lower.as_str(), "true" | "false" | "null" | "yes" | "no" | "on" | "off") {
+        return true;
+    }
+    if s.parse::<f64>().is_ok() {
+        return true;
+    }
+    false
+}
+
+pub fn yaml_scalar(s: &str) -> String {
+    if needs_quoting(s) {
+        let escaped = s
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\t', "\\t")
+            .replace('\r', "\\r");
+        format!("\"{}\"", escaped)
+    } else {
+        s.to_string()
+    }
+}
+
+pub fn write_yaml_array(out: &mut String, key: &str, items: &[String]) {
+    if items.is_empty() {
+        out.push_str(&format!("{}: []\n", key));
+        return;
+    }
+    let items_str: Vec<String> = items.iter().map(|s| yaml_scalar(s)).collect();
+    out.push_str(&format!("{}: [{}]\n", key, items_str.join(", ")));
+}
+
+pub fn write_yaml_notes(out: &mut String, notes: &[Note]) {
+    if notes.is_empty() {
+        out.push_str("notes: []\n");
+        return;
+    }
+    out.push_str("notes:\n");
+    for note in notes {
+        out.push_str(&format!("  - timestamp: {}\n", yaml_scalar(&note.timestamp)));
+        if note.text.contains('\n') {
+            out.push_str("    text: |-\n");
+            for line in note.text.lines() {
+                out.push_str(&format!("        {}\n", line));
+            }
+        } else {
+            out.push_str(&format!("    text: {}\n", yaml_scalar(&note.text)));
+        }
+    }
+}
 
 pub fn find_vima_root() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("VIMA_DIR") {
@@ -96,6 +165,91 @@ impl Store {
             }
         }
         Ok(tickets)
+    }
+
+    pub fn write_ticket(&self, ticket: &Ticket) -> Result<()> {
+        let strip = |s: &str| s.replace('\0', "");
+
+        let mut out = String::new();
+        out.push_str("---\n");
+
+        out.push_str(&format!("id: {}\n", yaml_scalar(&strip(&ticket.id))));
+        out.push_str(&format!("title: {}\n", yaml_scalar(&strip(&ticket.title))));
+        out.push_str(&format!("status: {}\n", ticket.status.as_str()));
+        out.push_str(&format!("type: {}\n", ticket.ticket_type.as_str()));
+        out.push_str(&format!("priority: {}\n", ticket.priority));
+
+        let tags: Vec<String> = ticket.tags.iter().map(|s| strip(s)).collect();
+        write_yaml_array(&mut out, "tags", &tags);
+
+        match &ticket.assignee {
+            Some(a) => out.push_str(&format!("assignee: {}\n", yaml_scalar(&strip(a)))),
+            None => out.push_str("assignee: null\n"),
+        }
+        match ticket.estimate {
+            Some(e) => out.push_str(&format!("estimate: {}\n", e)),
+            None => out.push_str("estimate: null\n"),
+        }
+
+        let deps: Vec<String> = ticket.deps.iter().map(|s| strip(s)).collect();
+        write_yaml_array(&mut out, "deps", &deps);
+
+        let links: Vec<String> = ticket.links.iter().map(|s| strip(s)).collect();
+        write_yaml_array(&mut out, "links", &links);
+
+        match &ticket.parent {
+            Some(p) => out.push_str(&format!("parent: {}\n", yaml_scalar(&strip(p)))),
+            None => out.push_str("parent: null\n"),
+        }
+
+        out.push_str(&format!("created: {}\n", yaml_scalar(&strip(&ticket.created))));
+
+        for (key, val) in &[
+            ("description", &ticket.description),
+            ("design", &ticket.design),
+            ("acceptance", &ticket.acceptance),
+        ] {
+            if let Some(v) = val {
+                let stripped = strip(v);
+                if stripped.contains('\n') {
+                    out.push_str(&format!("{}: |-\n", key));
+                    for line in stripped.lines() {
+                        out.push_str(&format!("  {}\n", line));
+                    }
+                } else {
+                    out.push_str(&format!("{}: {}\n", key, yaml_scalar(&stripped)));
+                }
+            }
+        }
+
+        let stripped_notes: Vec<Note> = ticket
+            .notes
+            .iter()
+            .map(|n| Note {
+                timestamp: strip(&n.timestamp),
+                text: strip(&n.text),
+            })
+            .collect();
+        write_yaml_notes(&mut out, &stripped_notes);
+
+        out.push_str("---\n");
+
+        if let Some(body) = &ticket.body {
+            let stripped = strip(body);
+            if !stripped.is_empty() {
+                out.push_str(&stripped);
+                if !stripped.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+        }
+
+        let tmp_path = self.tickets.join(format!("{}.md.tmp", ticket.id));
+        let final_path = self.tickets.join(format!("{}.md", ticket.id));
+        fs::write(&tmp_path, &out)?;
+        fs::rename(&tmp_path, &final_path)?;
+
+        Ok(())
     }
 
     pub fn tickets_dir(&self) -> &Path {
@@ -229,5 +383,182 @@ This is the **markdown** body.
         fs::write(tickets_dir.join("good.md.tmp"), VALID_TICKET).unwrap();
         let tickets = store.read_all().unwrap();
         assert_eq!(tickets.len(), 1);
+    }
+
+    // --- needs_quoting ---
+
+    #[test]
+    fn needs_quoting_plain_word() {
+        assert!(!needs_quoting("hello"));
+    }
+
+    #[test]
+    fn needs_quoting_true_keyword() {
+        assert!(needs_quoting("true"));
+    }
+
+    #[test]
+    fn needs_quoting_colon_in_value() {
+        assert!(needs_quoting(": colon"));
+    }
+
+    #[test]
+    fn needs_quoting_empty() {
+        assert!(needs_quoting(""));
+    }
+
+    #[test]
+    fn needs_quoting_false_keyword() {
+        assert!(needs_quoting("false"));
+    }
+
+    #[test]
+    fn needs_quoting_null_keyword() {
+        assert!(needs_quoting("null"));
+    }
+
+    #[test]
+    fn needs_quoting_numeric() {
+        assert!(needs_quoting("42"));
+        assert!(needs_quoting("3.14"));
+    }
+
+    #[test]
+    fn needs_quoting_leading_whitespace() {
+        assert!(needs_quoting(" hello"));
+    }
+
+    #[test]
+    fn needs_quoting_trailing_whitespace() {
+        assert!(needs_quoting("hello "));
+    }
+
+    #[test]
+    fn needs_quoting_contains_hash() {
+        assert!(needs_quoting("foo#bar"));
+    }
+
+    #[test]
+    fn needs_quoting_starts_with_dash() {
+        assert!(needs_quoting("-item"));
+    }
+
+    // --- yaml_scalar ---
+
+    #[test]
+    fn yaml_scalar_plain() {
+        assert_eq!(yaml_scalar("hello"), "hello");
+    }
+
+    #[test]
+    fn yaml_scalar_quotes_special() {
+        assert_eq!(yaml_scalar("has \"quotes\""), "\"has \\\"quotes\\\"\"");
+    }
+
+    #[test]
+    fn yaml_scalar_newline_escaped() {
+        assert_eq!(yaml_scalar("line1\nline2"), "\"line1\\nline2\"");
+    }
+
+    // --- write_ticket round-trip ---
+
+    use crate::ticket::{Note, Status, Ticket, TicketType};
+
+    fn make_full_ticket() -> Ticket {
+        Ticket {
+            id: "rt-abc1".to_string(),
+            title: "Round-trip: title with special chars".to_string(),
+            status: Status::InProgress,
+            ticket_type: TicketType::Bug,
+            priority: 1,
+            tags: vec![],
+            assignee: Some("Alice Smith".to_string()),
+            estimate: Some(90),
+            deps: vec!["rt-dep1".to_string()],
+            links: vec!["https://example.com".to_string()],
+            parent: Some("rt-parent1".to_string()),
+            created: "2026-04-02T10:00:00Z".to_string(),
+            description: Some("First line\nSecond line".to_string()),
+            design: Some("Design notes".to_string()),
+            acceptance: Some("First criterion\nSecond criterion".to_string()),
+            notes: vec![
+                Note {
+                    timestamp: "2026-04-02T10:01:00Z".to_string(),
+                    text: "simple note".to_string(),
+                },
+                Note {
+                    timestamp: "2026-04-02T10:02:00Z".to_string(),
+                    text: "note with : colon\nnote # hash\nnote \"quotes\"".to_string(),
+                },
+            ],
+            body: Some("Markdown body content.".to_string()),
+            blocks: vec!["computed-block".to_string()],
+            children: vec!["computed-child".to_string()],
+        }
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_round_trip() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let original = make_full_ticket();
+        store.write_ticket(&original).unwrap();
+        let read_back = store.read_ticket(&original.id).unwrap();
+
+        assert_eq!(read_back.id, original.id);
+        assert_eq!(read_back.title, original.title);
+        assert_eq!(read_back.status, original.status);
+        assert_eq!(read_back.ticket_type, original.ticket_type);
+        assert_eq!(read_back.priority, original.priority);
+        assert_eq!(read_back.tags, original.tags);
+        assert_eq!(read_back.assignee, original.assignee);
+        assert_eq!(read_back.estimate, original.estimate);
+        assert_eq!(read_back.deps, original.deps);
+        assert_eq!(read_back.links, original.links);
+        assert_eq!(read_back.parent, original.parent);
+        assert_eq!(read_back.created, original.created);
+        assert_eq!(read_back.description, original.description);
+        assert_eq!(read_back.design, original.design);
+        assert_eq!(read_back.acceptance, original.acceptance);
+        assert_eq!(read_back.notes.len(), original.notes.len());
+        assert_eq!(read_back.notes[0].timestamp, original.notes[0].timestamp);
+        assert_eq!(read_back.notes[0].text, original.notes[0].text);
+        assert_eq!(read_back.notes[1].timestamp, original.notes[1].timestamp);
+        assert_eq!(read_back.notes[1].text, original.notes[1].text);
+        assert_eq!(read_back.body, original.body);
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_no_blocks_or_children() {
+        let (_tmp, store, tickets_dir) = make_store();
+        let ticket = make_full_ticket();
+        store.write_ticket(&ticket).unwrap();
+        let content = fs::read_to_string(tickets_dir.join("rt-abc1.md")).unwrap();
+        assert!(!content.contains("blocks:"));
+        assert!(!content.contains("children:"));
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_no_tmp_file_on_success() {
+        let (_tmp, store, tickets_dir) = make_store();
+        let ticket = make_full_ticket();
+        store.write_ticket(&ticket).unwrap();
+        assert!(!tickets_dir.join("rt-abc1.md.tmp").exists());
+        assert!(tickets_dir.join("rt-abc1.md").exists());
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_strips_null_bytes() {
+        let (_tmp, store, tickets_dir) = make_store();
+        let mut ticket = make_full_ticket();
+        ticket.title = "Title\0with\0nulls".to_string();
+        ticket.description = Some("Desc\0ription".to_string());
+        store.write_ticket(&ticket).unwrap();
+        let content = fs::read_to_string(tickets_dir.join("rt-abc1.md")).unwrap();
+        assert!(!content.contains('\0'));
+        assert!(content.contains("Titlewithnulls"));
     }
 }
