@@ -11,13 +11,15 @@ const ALPHANUMERIC: [char; 36] = [
 
 pub fn validate_id(id: &str) -> Result<()> {
     if id.is_empty() {
-        return Err(Error::InvalidField("id contains invalid characters".into()));
+        return Err(Error::InvalidField("id must not be empty".into()));
     }
     if id.starts_with('.') {
-        return Err(Error::InvalidField("id contains invalid characters".into()));
+        return Err(Error::InvalidField("id must not start with '.'".into()));
     }
     if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') {
-        return Err(Error::InvalidField("id contains invalid characters".into()));
+        return Err(Error::InvalidField(
+            "id may only contain alphanumeric characters, '.', '_', or '-'".into(),
+        ));
     }
     Ok(())
 }
@@ -35,7 +37,7 @@ pub fn resolve_id(dir: &Path, input: &str, exact: bool) -> Result<String> {
         }
     }
 
-    // Fuzzy mode: try exact match first
+    // Exact match wins over substring to avoid ambiguity (e.g. "vm-abc" vs "vm-abc1")
     let exact_path = dir.join(format!("{input}.md"));
     if exact_path.exists() {
         return Ok(input.to_string());
@@ -67,21 +69,24 @@ pub fn resolve_id(dir: &Path, input: &str, exact: bool) -> Result<String> {
 pub fn get_prefix(vima_root: &Path) -> Result<String> {
     let config_path = vima_root.join(".vima/config.yml");
 
-    if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)?;
-        for line in content.lines() {
-            let line = line.trim();
-            if let Some(rest) = line.strip_prefix("prefix:") {
-                let prefix = rest
-                    .trim()
-                    .trim_matches('"')
-                    .trim_matches('\'')
-                    .to_string();
-                if !prefix.is_empty() {
-                    return Ok(prefix);
+    match std::fs::read_to_string(&config_path) {
+        Ok(content) => {
+            for line in content.lines() {
+                let line = line.trim();
+                if let Some(rest) = line.strip_prefix("prefix:") {
+                    let prefix = rest
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'')
+                        .to_string();
+                    if !prefix.is_empty() {
+                        return Ok(prefix);
+                    }
                 }
             }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
     }
 
     // Compute from directory name
