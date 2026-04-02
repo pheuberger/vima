@@ -110,6 +110,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
@@ -118,6 +119,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env)]
     fn find_vima_root_finds_vima_dir() {
         let tmp = make_temp();
         let vima = tmp.path().join(".vima");
@@ -132,6 +134,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env)]
     fn find_vima_root_walks_up_to_parent() {
         let tmp = make_temp();
         let vima = tmp.path().join(".vima");
@@ -147,6 +150,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(env)]
     fn find_vima_root_respects_vima_dir_env() {
         let tmp = make_temp();
         let vima = tmp.path().join("custom_vima");
@@ -188,6 +192,7 @@ This is the **markdown** body.
 "#;
 
     #[test]
+    #[serial(env)]
     fn read_ticket_parses_valid_ticket() {
         let (_tmp, store, id) = store_with_ticket(VALID_TICKET);
         let ticket = store.read_ticket(&id).unwrap();
@@ -197,6 +202,7 @@ This is the **markdown** body.
     }
 
     #[test]
+    #[serial(env)]
     fn read_ticket_preserves_body() {
         let (_tmp, store, id) = store_with_ticket(VALID_TICKET);
         let ticket = store.read_ticket(&id).unwrap();
@@ -205,6 +211,7 @@ This is the **markdown** body.
     }
 
     #[test]
+    #[serial(env)]
     fn read_all_skips_unparseable_files() {
         let (_tmp, store, tickets_dir) = make_store();
         fs::write(tickets_dir.join("good.md"), VALID_TICKET).unwrap();
@@ -215,6 +222,7 @@ This is the **markdown** body.
     }
 
     #[test]
+    #[serial(env)]
     fn read_all_excludes_tmp_files() {
         let (_tmp, store, tickets_dir) = make_store();
         fs::write(tickets_dir.join("good.md"), VALID_TICKET).unwrap();
