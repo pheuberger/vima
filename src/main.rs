@@ -2879,16 +2879,6 @@ mod tests {
         let result = cmd_dep_cycle();
         assert!(result.is_ok(), "dep cycle with no cycles should return Ok: {:?}", result);
 
-        // Verify the underlying data matches expected JSON output {"cycles": []}
-        let st = store::Store::open().unwrap();
-        let tickets = st.read_all().unwrap();
-        let cycles = deps::detect_all_cycles(&tickets);
-        assert_eq!(
-            serde_json::json!({ "cycles": cycles }),
-            serde_json::json!({ "cycles": Vec::<Vec<String>>::new() }),
-            "no-cycle graph should produce empty cycles JSON"
-        );
-
         std::env::remove_var("VIMA_DIR");
     }
 

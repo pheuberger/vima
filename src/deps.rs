@@ -281,6 +281,10 @@ pub fn would_create_cycle(tickets: &[Ticket], from: &str, to: &str) -> Option<Ve
     None
 }
 
+const COLOR_WHITE: u8 = 0; // unvisited
+const COLOR_GRAY: u8 = 1; // in current DFS path
+const COLOR_BLACK: u8 = 2; // fully processed
+
 /// Detect all cycles across open tickets using 3-color DFS.
 /// Returns a deduplicated list of cycles, each normalized so the lexicographically
 /// smallest ID appears first.
@@ -306,12 +310,11 @@ pub fn detect_all_cycles(tickets: &[Ticket]) -> Vec<Vec<String>> {
         })
         .collect();
 
-    // 3-color DFS: 0=white(unvisited), 1=gray(in-progress), 2=black(done)
     let mut color: HashMap<&str, u8> = HashMap::new();
     let mut raw_cycles: Vec<Vec<String>> = Vec::new();
 
     for &id in &open_ids {
-        if color.get(id).copied().unwrap_or(0) == 0 {
+        if color.get(id).copied().unwrap_or(COLOR_WHITE) == COLOR_WHITE {
             let mut path: Vec<&str> = Vec::new();
             dfs_collect_cycles(id, &dep_map, &mut color, &mut path, &mut raw_cycles);
         }
@@ -335,46 +338,42 @@ fn dfs_collect_cycles<'a>(
     path: &mut Vec<&'a str>,
     cycles: &mut Vec<Vec<String>>,
 ) {
-    color.insert(id, 1); // gray
+    color.insert(id, COLOR_GRAY);
     path.push(id);
 
     if let Some(deps) = dep_map.get(id) {
         for &dep in deps {
-            match color.get(dep).copied().unwrap_or(0) {
-                1 => {
-                    // Back edge — dep is gray (in current path): cycle found
+            match color.get(dep).copied().unwrap_or(COLOR_WHITE) {
+                COLOR_GRAY => {
+                    // Back edge — dep is in the current path: cycle found
                     if let Some(start_pos) = path.iter().position(|&x| x == dep) {
                         let cycle: Vec<String> =
                             path[start_pos..].iter().map(|s| s.to_string()).collect();
                         cycles.push(cycle);
                     }
                 }
-                0 => {
-                    // Unvisited — recurse
+                COLOR_WHITE => {
                     dfs_collect_cycles(dep, dep_map, color, path, cycles);
                 }
-                _ => {} // black — already fully processed, no cycle via this edge
+                _ => {} // COLOR_BLACK — already fully processed, no cycle via this edge
             }
         }
     }
 
     path.pop();
-    color.insert(id, 2); // black
+    color.insert(id, COLOR_BLACK);
 }
 
 /// Rotate cycle so the lexicographically smallest ID is first.
-fn normalize_cycle(cycle: Vec<String>) -> Vec<String> {
+fn normalize_cycle(mut cycle: Vec<String>) -> Vec<String> {
     let min_pos = cycle
         .iter()
         .enumerate()
         .min_by_key(|(_, id)| id.as_str())
         .map(|(i, _)| i)
         .unwrap_or(0);
-
-    let mut normalized = Vec::with_capacity(cycle.len());
-    normalized.extend_from_slice(&cycle[min_pos..]);
-    normalized.extend_from_slice(&cycle[..min_pos]);
-    normalized
+    cycle.rotate_left(min_pos);
+    cycle
 }
 
 pub fn compute_reverse_fields(tickets: &mut [Ticket]) {
