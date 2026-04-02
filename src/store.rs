@@ -322,6 +322,17 @@ mod tests {
         std::env::remove_var("VIMA_DIR");
     }
 
+    #[test]
+    #[serial(env)]
+    fn find_vima_root_returns_no_vima_dir() {
+        let tmp = tempfile::tempdir_in("/tmp").expect("create tempdir under /tmp");
+        std::env::set_current_dir(tmp.path()).unwrap();
+        std::env::remove_var("VIMA_DIR");
+
+        let result = find_vima_root();
+        assert!(matches!(result, Err(Error::NoVimaDir)));
+    }
+
     fn make_store() -> (TempDir, Store, PathBuf) {
         let tmp = make_temp();
         let vima = tmp.path().join(".vima");
