@@ -1,89 +1,41 @@
 mod cli;
+mod error;
 mod filter;
 mod ticket;
 
 use clap::Parser;
 use cli::{Cli, Commands};
+use error::{Error, Result};
+
+fn dispatch(cli: Cli) -> Result<()> {
+    match cli.command {
+        Commands::Create(_) => Err(Error::InvalidField("not implemented: create".into())),
+        Commands::Show(_) => Err(Error::InvalidField("not implemented: show".into())),
+        Commands::List(_) => Err(Error::InvalidField("not implemented: list".into())),
+        Commands::Ready(_) => Err(Error::InvalidField("not implemented: ready".into())),
+        Commands::Blocked(_) => Err(Error::InvalidField("not implemented: blocked".into())),
+        Commands::Closed(_) => Err(Error::InvalidField("not implemented: closed".into())),
+        Commands::Update(_) => Err(Error::InvalidField("not implemented: update".into())),
+        Commands::Start(_) => Err(Error::InvalidField("not implemented: start".into())),
+        Commands::Close(_) => Err(Error::InvalidField("not implemented: close".into())),
+        Commands::Reopen(_) => Err(Error::InvalidField("not implemented: reopen".into())),
+        Commands::IsReady(_) => Err(Error::InvalidField("not implemented: is-ready".into())),
+        Commands::AddNote(_) => Err(Error::InvalidField("not implemented: add-note".into())),
+        Commands::Dep(_) => Err(Error::InvalidField("not implemented: dep".into())),
+        Commands::Undep(_) => Err(Error::InvalidField("not implemented: undep".into())),
+        Commands::Link(_) => Err(Error::InvalidField("not implemented: link".into())),
+        Commands::Unlink(_) => Err(Error::InvalidField("not implemented: unlink".into())),
+        Commands::Init(_) => Err(Error::InvalidField("not implemented: init".into())),
+        Commands::Help(_) => Err(Error::InvalidField("not implemented: help".into())),
+        Commands::External(args) => Err(Error::InvalidField(format!("not implemented: {}", args[0]))),
+    }
+}
 
 fn main() {
     let cli = Cli::parse();
 
-    match cli.command {
-        Commands::Create(_) => {
-            eprintln!("not implemented: create");
-            std::process::exit(1);
-        }
-        Commands::Show(_) => {
-            eprintln!("not implemented: show");
-            std::process::exit(1);
-        }
-        Commands::List(_) => {
-            eprintln!("not implemented: list");
-            std::process::exit(1);
-        }
-        Commands::Ready(_) => {
-            eprintln!("not implemented: ready");
-            std::process::exit(1);
-        }
-        Commands::Blocked(_) => {
-            eprintln!("not implemented: blocked");
-            std::process::exit(1);
-        }
-        Commands::Closed(_) => {
-            eprintln!("not implemented: closed");
-            std::process::exit(1);
-        }
-        Commands::Update(_) => {
-            eprintln!("not implemented: update");
-            std::process::exit(1);
-        }
-        Commands::Start(_) => {
-            eprintln!("not implemented: start");
-            std::process::exit(1);
-        }
-        Commands::Close(_) => {
-            eprintln!("not implemented: close");
-            std::process::exit(1);
-        }
-        Commands::Reopen(_) => {
-            eprintln!("not implemented: reopen");
-            std::process::exit(1);
-        }
-        Commands::IsReady(_) => {
-            eprintln!("not implemented: is-ready");
-            std::process::exit(1);
-        }
-        Commands::AddNote(_) => {
-            eprintln!("not implemented: add-note");
-            std::process::exit(1);
-        }
-        Commands::Dep(_) => {
-            eprintln!("not implemented: dep");
-            std::process::exit(1);
-        }
-        Commands::Undep(_) => {
-            eprintln!("not implemented: undep");
-            std::process::exit(1);
-        }
-        Commands::Link(_) => {
-            eprintln!("not implemented: link");
-            std::process::exit(1);
-        }
-        Commands::Unlink(_) => {
-            eprintln!("not implemented: unlink");
-            std::process::exit(1);
-        }
-        Commands::Init(_) => {
-            eprintln!("not implemented: init");
-            std::process::exit(1);
-        }
-        Commands::Help(_) => {
-            eprintln!("not implemented: help");
-            std::process::exit(1);
-        }
-        Commands::External(args) => {
-            eprintln!("not implemented: {}", args[0]);
-            std::process::exit(1);
-        }
+    if let Err(err) = dispatch(cli) {
+        error::log_error(&err);
+        std::process::exit(err.exit_code());
     }
 }
