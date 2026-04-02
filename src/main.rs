@@ -63,23 +63,19 @@ vima is-ready ID              # exits 0 if ready, 1 if blocked
 "#;
 
 fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
-    // 1. Require title
     let title = args
         .title
         .ok_or_else(|| Error::InvalidField("title is required".into()))?;
 
-    // 2. Validate priority
     if let Some(p) = args.priority {
         if p > 4 {
             return Err(Error::InvalidField("priority must be 0-4".into()));
         }
     }
 
-    // Open store
     let st = store::Store::open()?;
     let tickets_dir = st.tickets_dir().to_path_buf();
 
-    // 3. Generate or validate ID
     let ticket_id = if let Some(explicit_id) = args.id {
         id::validate_id(&explicit_id)?;
         let path = tickets_dir.join(format!("{}.md", explicit_id));
@@ -96,34 +92,26 @@ fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
         id::generate_id(&prefix, &tickets_dir)?
     };
 
-    // 4. Parse tags
-    let tags: Vec<String> = match args.tags {
-        Some(t) => t
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect(),
-        None => vec![],
-    };
+    let tags: Vec<String> = args
+        .tags
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
 
-    // 5. Resolve deps
-    let mut deps = Vec::new();
-    for dep in &args.dep {
-        let resolved = st.resolve_id(dep, exact)?;
-        deps.push(resolved);
-    }
+    let deps = args
+        .dep
+        .iter()
+        .map(|dep| st.resolve_id(dep, exact))
+        .collect::<Result<Vec<_>>>()?;
 
-    // 6. Resolve parent
-    let parent = if let Some(p) = args.parent {
-        Some(st.resolve_id(&p, exact)?)
-    } else {
-        None
-    };
+    let parent = args
+        .parent
+        .map(|p| st.resolve_id(&p, exact))
+        .transpose()?;
 
-    // 7. Current timestamp
-    let created = jiff::Timestamp::now().to_string();
-
-    // 8. Build ticket
     let ticket = ticket::Ticket {
         id: ticket_id.clone(),
         title,
@@ -136,7 +124,7 @@ fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
         deps,
         links: vec![],
         parent,
-        created,
+        created: jiff::Timestamp::now().to_string(),
         description: args.description,
         design: args.design,
         acceptance: args.acceptance,
@@ -146,10 +134,8 @@ fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
         children: vec![],
     };
 
-    // 9. Write ticket
     st.write_ticket(&ticket)?;
 
-    // 10. Handle --blocks: add this ticket as a dep of each target
     for block_target in &args.blocks {
         let resolved = st.resolve_id(block_target, exact)?;
         let mut target = st.read_ticket(&resolved)?;
@@ -159,10 +145,7 @@ fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
         st.write_ticket(&target)?;
     }
 
-    // 11. Stderr
     eprintln!("Created {}", ticket_id);
-
-    // 12. Stdout: full ticket JSON (blocks/children are empty for a new ticket)
     output::output_one(&ticket, &None)?;
 
     Ok(())
@@ -393,7 +376,6 @@ mod tests {
         let result = cmd_create(args, false);
         assert!(result.is_ok(), "create failed: {:?}", result);
 
-        // Check a ticket file was created
         let tickets_dir = tmp.path().join(".vima/tickets");
         let entries: Vec<_> = std::fs::read_dir(&tickets_dir)
             .unwrap()
@@ -402,7 +384,6 @@ mod tests {
             .collect();
         assert_eq!(entries.len(), 1);
 
-        // Read and parse the ticket
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket(
             entries[0]
@@ -506,12 +487,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         setup_vima(&tmp);
 
-        // Create the dep ticket first
         let mut dep_args = create_args(Some("Existing dep"));
         dep_args.id = Some("dep-01".to_string());
         cmd_create(dep_args, false).unwrap();
 
-        // Create ticket that depends on it
         let mut args = create_args(Some("Dependent"));
         args.id = Some("dep-02".to_string());
         args.dep = vec!["dep-01".to_string()];
@@ -530,18 +509,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         setup_vima(&tmp);
 
-        // Create the target ticket first
         let mut target_args = create_args(Some("Target"));
         target_args.id = Some("target-01".to_string());
         cmd_create(target_args, false).unwrap();
 
-        // Create ticket that blocks the target
         let mut args = create_args(Some("Blocker"));
         args.id = Some("blocker-01".to_string());
         args.blocks = vec!["target-01".to_string()];
         cmd_create(args, true).unwrap();
 
-        // target-01 should now have blocker-01 in its deps
         let st = store::Store::open().unwrap();
         let target = st.read_ticket("target-01").unwrap();
         assert!(target.deps.contains(&"blocker-01".to_string()));
