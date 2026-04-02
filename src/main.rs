@@ -62,6 +62,112 @@ vima is-ready ID              # exits 0 if ready, 1 if blocked
 - All commands exit 0 on success, non-zero on error.
 "#;
 
+fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
+    // 1. Require title
+    let title = args
+        .title
+        .ok_or_else(|| Error::InvalidField("title is required".into()))?;
+
+    // 2. Validate priority
+    if let Some(p) = args.priority {
+        if p > 4 {
+            return Err(Error::InvalidField("priority must be 0-4".into()));
+        }
+    }
+
+    // Open store
+    let st = store::Store::open()?;
+    let tickets_dir = st.tickets_dir().to_path_buf();
+
+    // 3. Generate or validate ID
+    let ticket_id = if let Some(explicit_id) = args.id {
+        id::validate_id(&explicit_id)?;
+        let path = tickets_dir.join(format!("{}.md", explicit_id));
+        if path.exists() {
+            return Err(Error::IdExists(explicit_id));
+        }
+        explicit_id
+    } else {
+        let project_root = st
+            .root()
+            .parent()
+            .ok_or_else(|| Error::InvalidField("could not determine project root".into()))?;
+        let prefix = id::get_prefix(project_root)?;
+        id::generate_id(&prefix, &tickets_dir)?
+    };
+
+    // 4. Parse tags
+    let tags: Vec<String> = match args.tags {
+        Some(t) => t
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        None => vec![],
+    };
+
+    // 5. Resolve deps
+    let mut deps = Vec::new();
+    for dep in &args.dep {
+        let resolved = st.resolve_id(dep, exact)?;
+        deps.push(resolved);
+    }
+
+    // 6. Resolve parent
+    let parent = if let Some(p) = args.parent {
+        Some(st.resolve_id(&p, exact)?)
+    } else {
+        None
+    };
+
+    // 7. Current timestamp
+    let created = jiff::Timestamp::now().to_string();
+
+    // 8. Build ticket
+    let ticket = ticket::Ticket {
+        id: ticket_id.clone(),
+        title,
+        status: ticket::Status::Open,
+        ticket_type: args.ticket_type.unwrap_or(ticket::TicketType::Task),
+        priority: args.priority.unwrap_or(2),
+        tags,
+        assignee: args.assignee,
+        estimate: args.estimate,
+        deps,
+        links: vec![],
+        parent,
+        created,
+        description: args.description,
+        design: args.design,
+        acceptance: args.acceptance,
+        notes: vec![],
+        body: None,
+        blocks: vec![],
+        children: vec![],
+    };
+
+    // 9. Write ticket
+    st.write_ticket(&ticket)?;
+
+    // 10. Handle --blocks: add this ticket as a dep of each target
+    for block_target in &args.blocks {
+        let resolved = st.resolve_id(block_target, exact)?;
+        let mut target = st.read_ticket(&resolved)?;
+        if !target.deps.contains(&ticket_id) {
+            target.deps.push(ticket_id.clone());
+        }
+        st.write_ticket(&target)?;
+    }
+
+    // 11. Stderr
+    eprintln!("Created {}", ticket_id);
+
+    // 12. Stdout: full ticket JSON (blocks/children are empty for a new ticket)
+    output::output_one(&ticket, &None)?;
+
+    Ok(())
+}
+
 fn cmd_init(args: cli::InitArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let vima_dir = cwd.join(".vima");
@@ -91,8 +197,9 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
 }
 
 fn dispatch(cli: Cli) -> Result<()> {
+    let exact = cli.exact;
     match cli.command {
-        Commands::Create(_) => Err(Error::InvalidField("not implemented: create".into())),
+        Commands::Create(args) => cmd_create(args, exact),
         Commands::Show(_) => Err(Error::InvalidField("not implemented: show".into())),
         Commands::List(_) => Err(Error::InvalidField("not implemented: list".into())),
         Commands::Ready(_) => Err(Error::InvalidField("not implemented: ready".into())),
@@ -243,5 +350,202 @@ mod tests {
         // File must be unchanged
         let content = std::fs::read_to_string(&claude_md).unwrap();
         assert_eq!(content, "existing content");
+    }
+
+    // ── create command tests ─────────────────────────────────────────────────
+
+    fn setup_vima(tmp: &tempfile::TempDir) {
+        let vima = tmp.path().join(".vima");
+        std::fs::create_dir_all(vima.join("tickets")).unwrap();
+        std::fs::write(vima.join("config.yml"), "prefix: vi\n").unwrap();
+        std::env::set_var("VIMA_DIR", vima.to_str().unwrap());
+    }
+
+    fn create_args(title: Option<&str>) -> cli::CreateArgs {
+        cli::CreateArgs {
+            title: title.map(|s| s.to_string()),
+            ticket_type: None,
+            priority: None,
+            assignee: None,
+            estimate: None,
+            tags: None,
+            description: None,
+            design: None,
+            acceptance: None,
+            dep: vec![],
+            blocks: vec![],
+            parent: None,
+            id: None,
+            batch: false,
+        }
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_basic_ticket_returns_json_with_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Fix auth"));
+        args.ticket_type = Some(ticket::TicketType::Bug);
+        args.priority = Some(1);
+
+        let result = cmd_create(args, false);
+        assert!(result.is_ok(), "create failed: {:?}", result);
+
+        // Check a ticket file was created
+        let tickets_dir = tmp.path().join(".vima/tickets");
+        let entries: Vec<_> = std::fs::read_dir(&tickets_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".md"))
+            .collect();
+        assert_eq!(entries.len(), 1);
+
+        // Read and parse the ticket
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket(
+            entries[0]
+                .file_name()
+                .to_string_lossy()
+                .strip_suffix(".md")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ticket.title, "Fix auth");
+        assert_eq!(ticket.ticket_type, ticket::TicketType::Bug);
+        assert_eq!(ticket.priority, 1);
+        assert_eq!(ticket.status, ticket::Status::Open);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_with_explicit_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Test"));
+        args.id = Some("my-id-01".to_string());
+
+        cmd_create(args, false).unwrap();
+
+        let ticket_path = tmp.path().join(".vima/tickets/my-id-01.md");
+        assert!(ticket_path.exists());
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("my-id-01").unwrap();
+        assert_eq!(ticket.id, "my-id-01");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_without_title_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let args = create_args(None);
+        let result = cmd_create(args, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "invalid_field");
+        assert!(err.to_string().contains("title is required"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    fn create_with_traversal_id_returns_error() {
+        let err = id::validate_id("../traversal").unwrap_err();
+        assert_eq!(err.code(), "invalid_field");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_with_invalid_priority_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("A"));
+        args.priority = Some(5);
+
+        let result = cmd_create(args, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "invalid_field");
+        assert!(err.to_string().contains("priority must be 0-4"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_with_tags_populates_tags_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Tagged ticket"));
+        args.tags = Some("backend,auth".to_string());
+        args.id = Some("tagged-01".to_string());
+
+        cmd_create(args, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("tagged-01").unwrap();
+        assert_eq!(ticket.tags, vec!["backend", "auth"]);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_with_dep_populates_deps_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        // Create the dep ticket first
+        let mut dep_args = create_args(Some("Existing dep"));
+        dep_args.id = Some("dep-01".to_string());
+        cmd_create(dep_args, false).unwrap();
+
+        // Create ticket that depends on it
+        let mut args = create_args(Some("Dependent"));
+        args.id = Some("dep-02".to_string());
+        args.dep = vec!["dep-01".to_string()];
+        cmd_create(args, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("dep-02").unwrap();
+        assert_eq!(ticket.deps, vec!["dep-01"]);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_with_blocks_updates_target_deps() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        // Create the target ticket first
+        let mut target_args = create_args(Some("Target"));
+        target_args.id = Some("target-01".to_string());
+        cmd_create(target_args, false).unwrap();
+
+        // Create ticket that blocks the target
+        let mut args = create_args(Some("Blocker"));
+        args.id = Some("blocker-01".to_string());
+        args.blocks = vec!["target-01".to_string()];
+        cmd_create(args, true).unwrap();
+
+        // target-01 should now have blocker-01 in its deps
+        let st = store::Store::open().unwrap();
+        let target = st.read_ticket("target-01").unwrap();
+        assert!(target.deps.contains(&"blocker-01".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
     }
 }
