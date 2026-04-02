@@ -22,7 +22,7 @@ pub(crate) fn needs_quoting(s: &str) -> bool {
     if "-*&!|>%@`,[]{}#?'\"".contains(first) {
         return true;
     }
-    if s.contains(':') || s.contains('#') || s.contains('\n') || s.contains('"') || s.contains('\'') || s.contains(',') || s.contains(']') {
+    if s.contains(':') || s.contains('#') || s.contains('\n') || s.contains('"') || s.contains('\'') || s.contains(',') || s.contains(']') || s.contains('[') {
         return true;
     }
     if s.len() <= 5 {
@@ -487,6 +487,11 @@ This is the **markdown** body.
         assert!(needs_quoting("foo]bar"));
     }
 
+    #[test]
+    fn needs_quoting_interior_open_bracket() {
+        assert!(needs_quoting("foo[bar"));
+    }
+
     // --- yaml_scalar ---
 
     #[test]
@@ -612,6 +617,17 @@ This is the **markdown** body.
         let (_tmp, store, _tickets_dir) = make_store();
         let mut ticket = make_full_ticket();
         ticket.tags = vec!["bug, critical".to_string(), "needs ]".to_string()];
+        store.write_ticket(&ticket).unwrap();
+        let read_back = store.read_ticket(&ticket.id).unwrap();
+        assert_eq!(read_back.tags, ticket.tags);
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_tag_with_open_bracket_round_trip() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let mut ticket = make_full_ticket();
+        ticket.tags = vec!["open[bracket".to_string()];
         store.write_ticket(&ticket).unwrap();
         let read_back = store.read_ticket(&ticket.id).unwrap();
         assert_eq!(read_back.tags, ticket.tags);
