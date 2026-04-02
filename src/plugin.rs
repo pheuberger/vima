@@ -45,13 +45,14 @@ pub fn discover_plugins() -> Vec<(String, Option<String>)> {
                 continue;
             }
             let command = name["vima-".len()..].to_string();
-            if command.is_empty() || !seen.insert(command.clone()) {
+            if command.is_empty() || seen.contains(&command) {
                 continue;
             }
             let path = entry.path();
             if !is_executable(&path) {
                 continue;
             }
+            seen.insert(command.clone());
             let description = read_plugin_description(&path);
             plugins.push((command, description));
         }
@@ -139,6 +140,39 @@ mod tests {
 
         let found = plugins.iter().find(|(name, _)| name == "notexec");
         assert!(found.is_none(), "non-executable should not be discovered");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn discover_plugins_prefers_executable_over_non_executable_earlier_in_path() {
+        let tmp1 = tempdir().unwrap();
+        let tmp2 = tempdir().unwrap();
+
+        // dir1 has a non-executable vima-foo
+        let non_exec = tmp1.path().join("vima-foo");
+        std::fs::write(&non_exec, "#!/bin/sh\necho non-exec\n").unwrap();
+        // intentionally NOT setting executable bit
+
+        // dir2 has an executable vima-foo
+        let exec_plugin = tmp2.path().join("vima-foo");
+        std::fs::write(&exec_plugin, "#!/bin/sh\necho exec\n").unwrap();
+        make_executable(&exec_plugin);
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let new_path = format!(
+            "{}:{}:{}",
+            tmp1.path().display(),
+            tmp2.path().display(),
+            original_path
+        );
+        unsafe { env::set_var("PATH", &new_path) };
+
+        let plugins = discover_plugins();
+
+        unsafe { env::set_var("PATH", &original_path) };
+
+        let found = plugins.iter().find(|(name, _)| name == "foo");
+        assert!(found.is_some(), "should find vima-foo from dir2");
     }
 
     #[test]
