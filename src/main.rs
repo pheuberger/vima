@@ -3,6 +3,7 @@ mod deps;
 mod error;
 mod filter;
 mod id;
+mod output;
 mod store;
 mod ticket;
 
