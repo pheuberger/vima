@@ -281,6 +281,103 @@ pub fn would_create_cycle(tickets: &[Ticket], from: &str, to: &str) -> Option<Ve
     None
 }
 
+/// Detect all cycles across open tickets using 3-color DFS.
+/// Returns a deduplicated list of cycles, each normalized so the lexicographically
+/// smallest ID appears first.
+pub fn detect_all_cycles(tickets: &[Ticket]) -> Vec<Vec<String>> {
+    // Filter to non-closed tickets only
+    let open_tickets: Vec<&Ticket> = tickets
+        .iter()
+        .filter(|t| t.status != Status::Closed)
+        .collect();
+
+    let open_ids: HashSet<&str> = open_tickets.iter().map(|t| t.id.as_str()).collect();
+
+    // Build adjacency list (only edges to other open tickets)
+    let dep_map: HashMap<&str, Vec<&str>> = open_tickets
+        .iter()
+        .map(|t| {
+            let deps: Vec<&str> = t
+                .deps
+                .iter()
+                .map(|d| d.as_str())
+                .filter(|d| open_ids.contains(d))
+                .collect();
+            (t.id.as_str(), deps)
+        })
+        .collect();
+
+    // 3-color DFS: 0=white(unvisited), 1=gray(in-progress), 2=black(done)
+    let mut color: HashMap<&str, u8> = HashMap::new();
+    let mut raw_cycles: Vec<Vec<String>> = Vec::new();
+
+    for &id in &open_ids {
+        if color.get(id).copied().unwrap_or(0) == 0 {
+            let mut path: Vec<&str> = Vec::new();
+            dfs_collect_cycles(id, &dep_map, &mut color, &mut path, &mut raw_cycles);
+        }
+    }
+
+    // Normalize and deduplicate
+    let mut normalized: Vec<Vec<String>> = raw_cycles
+        .into_iter()
+        .map(normalize_cycle)
+        .collect();
+
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn dfs_collect_cycles<'a>(
+    id: &'a str,
+    dep_map: &HashMap<&'a str, Vec<&'a str>>,
+    color: &mut HashMap<&'a str, u8>,
+    path: &mut Vec<&'a str>,
+    cycles: &mut Vec<Vec<String>>,
+) {
+    color.insert(id, 1); // gray
+    path.push(id);
+
+    if let Some(deps) = dep_map.get(id) {
+        for &dep in deps {
+            match color.get(dep).copied().unwrap_or(0) {
+                1 => {
+                    // Back edge — dep is gray (in current path): cycle found
+                    if let Some(start_pos) = path.iter().position(|&x| x == dep) {
+                        let cycle: Vec<String> =
+                            path[start_pos..].iter().map(|s| s.to_string()).collect();
+                        cycles.push(cycle);
+                    }
+                }
+                0 => {
+                    // Unvisited — recurse
+                    dfs_collect_cycles(dep, dep_map, color, path, cycles);
+                }
+                _ => {} // black — already fully processed, no cycle via this edge
+            }
+        }
+    }
+
+    path.pop();
+    color.insert(id, 2); // black
+}
+
+/// Rotate cycle so the lexicographically smallest ID is first.
+fn normalize_cycle(cycle: Vec<String>) -> Vec<String> {
+    let min_pos = cycle
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, id)| id.as_str())
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    let mut normalized = Vec::with_capacity(cycle.len());
+    normalized.extend_from_slice(&cycle[min_pos..]);
+    normalized.extend_from_slice(&cycle[..min_pos]);
+    normalized
+}
+
 pub fn compute_reverse_fields(tickets: &mut [Ticket]) {
     let mut blocks_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
@@ -519,5 +616,76 @@ mod tests {
         assert_eq!(tree.deps.len(), 1);
         assert_eq!(tree.deps[0].id, "ghost");
         assert!(tree.deps[0].title.contains("[missing]"));
+    }
+
+    // ── detect_all_cycles unit tests ─────────────────────────────────────────
+
+    fn make_closed_ticket(id: &str, deps: Vec<&str>) -> Ticket {
+        let mut t = make_ticket(id, deps, None);
+        t.status = Status::Closed;
+        t
+    }
+
+    #[test]
+    fn detect_all_cycles_no_cycles_returns_empty() {
+        // A→B→C — acyclic
+        let tickets = vec![
+            make_ticket("A", vec!["B"], None),
+            make_ticket("B", vec!["C"], None),
+            make_ticket("C", vec![], None),
+        ];
+        let cycles = detect_all_cycles(&tickets);
+        assert!(cycles.is_empty());
+    }
+
+    #[test]
+    fn detect_all_cycles_three_node_cycle() {
+        // A→B→C→A — one cycle
+        let tickets = vec![
+            make_ticket("A", vec!["B"], None),
+            make_ticket("B", vec!["C"], None),
+            make_ticket("C", vec!["A"], None),
+        ];
+        let cycles = detect_all_cycles(&tickets);
+        assert_eq!(cycles.len(), 1);
+        // Normalized: smallest ID first → [A, B, C]
+        assert_eq!(cycles[0], vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn detect_all_cycles_skips_closed_tickets() {
+        // A→B→A would be a cycle, but B is closed — no cycle visible
+        let tickets = vec![
+            make_ticket("A", vec!["B"], None),
+            make_closed_ticket("B", vec!["A"]),
+        ];
+        let cycles = detect_all_cycles(&tickets);
+        assert!(cycles.is_empty(), "closed ticket should break the cycle");
+    }
+
+    #[test]
+    fn detect_all_cycles_normalizes_rotation() {
+        // Cycle C→A→B→C — after normalization should be [A, B, C]
+        // We set it up so the DFS starts at C, giving [C, A, B]
+        let tickets = vec![
+            make_ticket("C", vec!["A"], None),
+            make_ticket("A", vec!["B"], None),
+            make_ticket("B", vec!["C"], None),
+        ];
+        let cycles = detect_all_cycles(&tickets);
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0], vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn detect_all_cycles_deduplicates() {
+        // Two-node cycle A→B→A; DFS from both A and B would each find it
+        let tickets = vec![
+            make_ticket("A", vec!["B"], None),
+            make_ticket("B", vec!["A"], None),
+        ];
+        let cycles = detect_all_cycles(&tickets);
+        assert_eq!(cycles.len(), 1, "same cycle found from different starts should be deduped");
+        assert_eq!(cycles[0], vec!["A", "B"]);
     }
 }

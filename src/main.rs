@@ -454,6 +454,17 @@ fn cmd_dep_tree(args: cli::TreeArgs, exact: bool, pretty: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_dep_cycle() -> Result<()> {
+    let st = store::Store::open()?;
+    let tickets = st.read_all()?;
+    let cycles = deps::detect_all_cycles(&tickets);
+    println!("{}", serde_json::json!({ "cycles": cycles }));
+    if !cycles.is_empty() {
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
 fn cmd_init(args: cli::InitArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let vima_dir = cwd.join(".vima");
@@ -708,7 +719,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Dep(dep_args) => match dep_args.command {
             cli::DepCommands::Add(add_args) => cmd_dep_add(add_args, exact),
             cli::DepCommands::Tree(args) => cmd_dep_tree(args, exact, pretty),
-            cli::DepCommands::Cycle => Err(Error::InvalidField("not implemented: dep cycle".into())),
+            cli::DepCommands::Cycle => cmd_dep_cycle(),
         },
         Commands::Undep(args) => cmd_undep(args, exact),
         Commands::Link(args) => cmd_link(args, exact),
