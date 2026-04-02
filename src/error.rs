@@ -67,7 +67,14 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::IoError(e) => Some(e),
-            _ => None,
+            Error::NotFound(_) => None,
+            Error::AmbiguousId(_, _) => None,
+            Error::Cycle(_) => None,
+            Error::InvalidBackref(_) => None,
+            Error::IdExists(_) => None,
+            Error::InvalidField(_) => None,
+            Error::NoVimaDir => None,
+            Error::YamlError(_) => None,
         }
     }
 }
@@ -96,7 +103,13 @@ pub fn error_json(err: &Error) -> serde_json::Value {
         Error::Cycle(path) => {
             json["cycle"] = serde_json::json!(path);
         }
-        _ => {}
+        Error::NotFound(_) => {}
+        Error::InvalidBackref(_) => {}
+        Error::IdExists(_) => {}
+        Error::InvalidField(_) => {}
+        Error::NoVimaDir => {}
+        Error::IoError(_) => {}
+        Error::YamlError(_) => {}
     }
     json
 }
