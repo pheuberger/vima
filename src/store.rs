@@ -22,7 +22,7 @@ pub(crate) fn needs_quoting(s: &str) -> bool {
     if "-*&!|>%@`,[]{}#?'\"".contains(first) {
         return true;
     }
-    if s.contains(':') || s.contains('#') || s.contains('\n') || s.contains('"') || s.contains('\'') {
+    if s.contains(':') || s.contains('#') || s.contains('\n') || s.contains('"') || s.contains('\'') || s.contains(',') || s.contains(']') {
         return true;
     }
     if s.len() <= 5 {
@@ -477,6 +477,16 @@ This is the **markdown** body.
         assert!(needs_quoting("-item"));
     }
 
+    #[test]
+    fn needs_quoting_interior_comma() {
+        assert!(needs_quoting("bug, critical"));
+    }
+
+    #[test]
+    fn needs_quoting_interior_close_bracket() {
+        assert!(needs_quoting("foo]bar"));
+    }
+
     // --- yaml_scalar ---
 
     #[test]
@@ -594,5 +604,16 @@ This is the **markdown** body.
         let content = fs::read_to_string(tickets_dir.join("rt-abc1.md")).unwrap();
         assert!(!content.contains('\0'));
         assert!(content.contains("Titlewithnulls"));
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_tags_with_comma_and_bracket_round_trip() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let mut ticket = make_full_ticket();
+        ticket.tags = vec!["bug, critical".to_string(), "needs ]".to_string()];
+        store.write_ticket(&ticket).unwrap();
+        let read_back = store.read_ticket(&ticket.id).unwrap();
+        assert_eq!(read_back.tags, ticket.tags);
     }
 }
