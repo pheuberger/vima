@@ -47,8 +47,8 @@ pub fn resolve_id(dir: &Path, input: &str, exact: bool) -> Result<String> {
     let mut matches = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy().into_owned();
+        let os_name = entry.file_name();
+        let name = os_name.to_string_lossy();
         if name.ends_with(".md.tmp") {
             continue;
         }
@@ -62,10 +62,7 @@ pub fn resolve_id(dir: &Path, input: &str, exact: bool) -> Result<String> {
         }
     }
 
-    match matches.len() {
-        0 => Err(Error::NotFound(input.to_string())),
-        _ => Ok(matches.into_iter().next().unwrap()),
-    }
+    matches.into_iter().next().ok_or_else(|| Error::NotFound(input.to_string()))
 }
 
 pub fn get_prefix(vima_root: &Path) -> Result<String> {
