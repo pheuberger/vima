@@ -2,6 +2,7 @@ mod cli;
 mod error;
 mod filter;
 mod id;
+mod store;
 mod ticket;
 
 use clap::Parser;
