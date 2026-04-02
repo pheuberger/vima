@@ -159,6 +159,92 @@ fn cmd_show(args: cli::ShowArgs, exact: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_add_note(args: cli::AddNoteArgs, exact: bool) -> Result<()> {
+    use std::io::Read;
+
+    let st = store::Store::open()?;
+    let resolved = st.resolve_id(&args.id, exact)?;
+
+    let text = if let Some(t) = args.text {
+        t
+    } else {
+        let mut buf = String::new();
+        std::io::stdin().take(65536).read_to_string(&mut buf)?;
+        buf.trim_end_matches('\n').to_string()
+    };
+
+    if text.is_empty() {
+        return Err(Error::InvalidField("note text is empty".into()));
+    }
+
+    let mut ticket = st.read_ticket(&resolved)?;
+    ticket.notes.push(ticket::Note {
+        timestamp: jiff::Timestamp::now().to_string(),
+        text,
+    });
+    st.write_ticket(&ticket)?;
+
+    let updated = st.load_and_compute(&resolved)?;
+    eprintln!("Added note to {}", resolved);
+    output::output_one(&updated, &None)?;
+
+    Ok(())
+}
+
+fn cmd_link(args: cli::LinkArgs, exact: bool) -> Result<()> {
+    let st = store::Store::open()?;
+    let id_a = st.resolve_id(&args.id_a, exact)?;
+    let id_b = st.resolve_id(&args.id_b, exact)?;
+
+    let mut ticket_a = st.read_ticket(&id_a)?;
+    let mut ticket_b = st.read_ticket(&id_b)?;
+
+    let already_linked = ticket_a.links.contains(&id_b) && ticket_b.links.contains(&id_a);
+
+    if !already_linked {
+        if !ticket_a.links.contains(&id_b) {
+            ticket_a.links.push(id_b.clone());
+        }
+        if !ticket_b.links.contains(&id_a) {
+            ticket_b.links.push(id_a.clone());
+        }
+        st.write_ticket(&ticket_a)?;
+        st.write_ticket(&ticket_b)?;
+    }
+
+    let updated_a = st.load_and_compute(&id_a)?;
+    let updated_b = st.load_and_compute(&id_b)?;
+    eprintln!("Linked {} \u{2194} {}", id_a, id_b);
+    output::output_many(&[updated_a, updated_b], &None, false)?;
+
+    Ok(())
+}
+
+fn cmd_unlink(args: cli::LinkArgs, exact: bool) -> Result<()> {
+    let st = store::Store::open()?;
+    let id_a = st.resolve_id(&args.id_a, exact)?;
+    let id_b = st.resolve_id(&args.id_b, exact)?;
+
+    let mut ticket_a = st.read_ticket(&id_a)?;
+    let mut ticket_b = st.read_ticket(&id_b)?;
+
+    let had_link = ticket_a.links.contains(&id_b) || ticket_b.links.contains(&id_a);
+
+    if had_link {
+        ticket_a.links.retain(|x| x != &id_b);
+        ticket_b.links.retain(|x| x != &id_a);
+        st.write_ticket(&ticket_a)?;
+        st.write_ticket(&ticket_b)?;
+    }
+
+    let updated_a = st.load_and_compute(&id_a)?;
+    let updated_b = st.load_and_compute(&id_b)?;
+    eprintln!("Unlinked {} \u{2194} {}", id_a, id_b);
+    output::output_many(&[updated_a, updated_b], &None, false)?;
+
+    Ok(())
+}
+
 fn cmd_init(args: cli::InitArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let vima_dir = cwd.join(".vima");
@@ -201,11 +287,11 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Close(_) => Err(Error::InvalidField("not implemented: close".into())),
         Commands::Reopen(_) => Err(Error::InvalidField("not implemented: reopen".into())),
         Commands::IsReady(_) => Err(Error::InvalidField("not implemented: is-ready".into())),
-        Commands::AddNote(_) => Err(Error::InvalidField("not implemented: add-note".into())),
+        Commands::AddNote(args) => cmd_add_note(args, exact),
         Commands::Dep(_) => Err(Error::InvalidField("not implemented: dep".into())),
         Commands::Undep(_) => Err(Error::InvalidField("not implemented: undep".into())),
-        Commands::Link(_) => Err(Error::InvalidField("not implemented: link".into())),
-        Commands::Unlink(_) => Err(Error::InvalidField("not implemented: unlink".into())),
+        Commands::Link(args) => cmd_link(args, exact),
+        Commands::Unlink(args) => cmd_unlink(args, exact),
         Commands::Init(args) => cmd_init(args),
         Commands::Help(_) => Err(Error::InvalidField("not implemented: help".into())),
         Commands::External(args) => Err(Error::InvalidField(format!("not implemented: {}", args[0]))),
@@ -659,6 +745,223 @@ mod tests {
         assert!(result.is_err(), "expected error for nonexistent id");
         let err = result.unwrap_err();
         assert_eq!(err.code(), "not_found");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    fn add_note_args(id: &str, text: Option<&str>) -> cli::AddNoteArgs {
+        cli::AddNoteArgs {
+            id: id.to_string(),
+            text: text.map(|s| s.to_string()),
+        }
+    }
+
+    fn link_args(id_a: &str, id_b: &str) -> cli::LinkArgs {
+        cli::LinkArgs {
+            id_a: id_a.to_string(),
+            id_b: id_b.to_string(),
+        }
+    }
+
+    // ── add-note command tests ───────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn add_note_with_text_arg_saves_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Ticket with note"));
+        args.id = Some("note-01".to_string());
+        cmd_create(args, false).unwrap();
+
+        cmd_add_note(add_note_args("note-01", Some("My note")), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("note-01").unwrap();
+        assert_eq!(ticket.notes.len(), 1);
+        assert_eq!(ticket.notes[0].text, "My note");
+        assert!(!ticket.notes[0].timestamp.is_empty());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn add_note_multiple_notes_appended() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Multi-note ticket"));
+        args.id = Some("note-02".to_string());
+        cmd_create(args, false).unwrap();
+
+        cmd_add_note(add_note_args("note-02", Some("First note")), true).unwrap();
+        cmd_add_note(add_note_args("note-02", Some("Second note")), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("note-02").unwrap();
+        assert_eq!(ticket.notes.len(), 2);
+        assert_eq!(ticket.notes[0].text, "First note");
+        assert_eq!(ticket.notes[1].text, "Second note");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn add_note_with_empty_text_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Empty note ticket"));
+        args.id = Some("note-03".to_string());
+        cmd_create(args, false).unwrap();
+
+        let result = cmd_add_note(add_note_args("note-03", Some("")), true);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "invalid_field");
+        assert!(err.to_string().contains("note text is empty"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn add_note_nonexistent_ticket_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let result = cmd_add_note(add_note_args("nonexistent", Some("note")), true);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "not_found");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── link command tests ───────────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn link_creates_symmetric_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("link-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("link-b".to_string());
+        cmd_create(b, false).unwrap();
+
+        cmd_link(link_args("link-a", "link-b"), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ta = st.read_ticket("link-a").unwrap();
+        let tb = st.read_ticket("link-b").unwrap();
+        assert!(ta.links.contains(&"link-b".to_string()));
+        assert!(tb.links.contains(&"link-a".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn link_idempotent_no_duplicates() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("idem-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("idem-b".to_string());
+        cmd_create(b, false).unwrap();
+
+        cmd_link(link_args("idem-a", "idem-b"), true).unwrap();
+        cmd_link(link_args("idem-a", "idem-b"), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ta = st.read_ticket("idem-a").unwrap();
+        let tb = st.read_ticket("idem-b").unwrap();
+        assert_eq!(ta.links.iter().filter(|x| *x == "idem-b").count(), 1);
+        assert_eq!(tb.links.iter().filter(|x| *x == "idem-a").count(), 1);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn link_nonexistent_ticket_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("exists-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let result = cmd_link(link_args("exists-a", "does-not-exist"), true);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "not_found");
+
+        // Verify exists-a was not modified
+        let st = store::Store::open().unwrap();
+        let ta = st.read_ticket("exists-a").unwrap();
+        assert!(ta.links.is_empty());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── unlink command tests ─────────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn unlink_removes_symmetric_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("ul-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("ul-b".to_string());
+        cmd_create(b, false).unwrap();
+
+        cmd_link(link_args("ul-a", "ul-b"), true).unwrap();
+        cmd_unlink(link_args("ul-a", "ul-b"), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ta = st.read_ticket("ul-a").unwrap();
+        let tb = st.read_ticket("ul-b").unwrap();
+        assert!(!ta.links.contains(&"ul-b".to_string()));
+        assert!(!tb.links.contains(&"ul-a".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn unlink_noop_when_not_linked() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("nul-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("nul-b".to_string());
+        cmd_create(b, false).unwrap();
+
+        // Unlink when never linked — should succeed without error
+        let result = cmd_unlink(link_args("nul-a", "nul-b"), true);
+        assert!(result.is_ok());
 
         std::env::remove_var("VIMA_DIR");
     }
