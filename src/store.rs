@@ -5,6 +5,7 @@ use gray_matter::engine::YAML;
 use gray_matter::Matter;
 
 use crate::error::{Error, Result};
+use crate::id;
 use crate::ticket::{Note, Ticket};
 
 pub(crate) fn needs_quoting(s: &str) -> bool {
@@ -254,6 +255,10 @@ impl Store {
         Ok(())
     }
 
+    pub fn resolve_id(&self, input: &str, exact: bool) -> Result<String> {
+        id::resolve_id(&self.tickets, input, exact)
+    }
+
     pub fn tickets_dir(&self) -> &Path {
         &self.tickets
     }
@@ -384,6 +389,34 @@ This is the **markdown** body.
         fs::write(tickets_dir.join("good.md.tmp"), VALID_TICKET).unwrap();
         let tickets = store.read_all().unwrap();
         assert_eq!(tickets.len(), 1);
+    }
+
+    // --- resolve_id ---
+
+    #[test]
+    #[serial(env)]
+    fn store_resolve_id_exact_match() {
+        let (_tmp, store, tickets_dir) = make_store();
+        fs::write(tickets_dir.join("test-abc.md"), VALID_TICKET).unwrap();
+        let result = store.resolve_id("test-abc", true).unwrap();
+        assert_eq!(result, "test-abc");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn store_resolve_id_fuzzy_match() {
+        let (_tmp, store, tickets_dir) = make_store();
+        fs::write(tickets_dir.join("test-abc.md"), VALID_TICKET).unwrap();
+        let result = store.resolve_id("abc", false).unwrap();
+        assert_eq!(result, "test-abc");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn store_resolve_id_not_found() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let err = store.resolve_id("xyz", false).unwrap_err();
+        assert!(matches!(err, Error::NotFound(_)));
     }
 
     // --- needs_quoting ---
