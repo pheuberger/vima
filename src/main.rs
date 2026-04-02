@@ -63,6 +63,14 @@ vima is-ready ID              # exits 0 if ready, 1 if blocked
 - All commands exit 0 on success, non-zero on error.
 "#;
 
+fn parse_tags(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
     let title = args
         .title
@@ -70,7 +78,7 @@ fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
 
     if let Some(p) = args.priority {
         if p > filter::MAX_PRIORITY {
-            return Err(Error::InvalidField("priority must be 0-4".into()));
+            return Err(Error::InvalidField(format!("priority must be 0-{}", filter::MAX_PRIORITY).into()));
         }
     }
 
@@ -93,14 +101,7 @@ fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
         id::generate_id(&prefix, &tickets_dir)?
     };
 
-    let tags: Vec<String> = args
-        .tags
-        .as_deref()
-        .unwrap_or("")
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let tags: Vec<String> = parse_tags(args.tags.as_deref().unwrap_or(""));
 
     let deps = args
         .dep
@@ -336,20 +337,16 @@ fn cmd_update(args: cli::UpdateArgs, exact: bool) -> Result<()> {
         ticket.design = if design.is_empty() { None } else { Some(design) };
     }
     if let Some(acceptance) = args.acceptance {
-        ticket.acceptance = Some(acceptance);
+        ticket.acceptance = if acceptance.is_empty() { None } else { Some(acceptance) };
     }
     if let Some(priority) = args.priority {
         if priority > filter::MAX_PRIORITY {
-            return Err(Error::InvalidField("priority must be 0-4".into()));
+            return Err(Error::InvalidField(format!("priority must be 0-{}", filter::MAX_PRIORITY).into()));
         }
         ticket.priority = priority;
     }
     if let Some(tags) = args.tags {
-        ticket.tags = tags
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        ticket.tags = parse_tags(&tags);
     }
     if let Some(assignee) = args.assignee {
         ticket.assignee = if assignee.is_empty() { None } else { Some(assignee) };
@@ -1682,9 +1679,6 @@ mod tests {
     #[test]
     #[serial(env)]
     fn update_stderr_contains_updated_id() {
-        // This test verifies the function runs without error (stderr is written
-        // by eprintln! and we can't easily capture it, but ensuring no panic/error
-        // is sufficient — the eprintln! call is directly verified in source).
         let tmp = tempfile::tempdir().unwrap();
         setup_vima(&tmp);
 
