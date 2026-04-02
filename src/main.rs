@@ -1158,7 +1158,7 @@ mod tests {
         c.dep = vec!["cy-b".to_string()];
         cmd_create(c, true).unwrap();
 
-        // Adding C -> A (C depends on A) would create A -> B -> C -> A cycle
+        // Adding A -> C (A depends on C) would create A -> C -> B -> A cycle
         let result = cmd_dep_add(add_dep_args("cy-a", "cy-c", false), true);
         assert!(result.is_err(), "expected cycle error");
         let err = result.unwrap_err();
