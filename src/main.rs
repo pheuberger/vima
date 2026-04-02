@@ -199,15 +199,16 @@ fn cmd_link(args: cli::LinkArgs, exact: bool) -> Result<()> {
     let mut ticket_a = st.read_ticket(&id_a)?;
     let mut ticket_b = st.read_ticket(&id_b)?;
 
-    let already_linked = ticket_a.links.contains(&id_b) && ticket_b.links.contains(&id_a);
-
-    if !already_linked {
-        if !ticket_a.links.contains(&id_b) {
-            ticket_a.links.push(id_b.clone());
-        }
-        if !ticket_b.links.contains(&id_a) {
-            ticket_b.links.push(id_a.clone());
-        }
+    let mut changed = false;
+    if !ticket_a.links.contains(&id_b) {
+        ticket_a.links.push(id_b.clone());
+        changed = true;
+    }
+    if !ticket_b.links.contains(&id_a) {
+        ticket_b.links.push(id_a.clone());
+        changed = true;
+    }
+    if changed {
         st.write_ticket(&ticket_a)?;
         st.write_ticket(&ticket_b)?;
     }
