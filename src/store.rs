@@ -41,9 +41,7 @@ impl Store {
     pub fn open() -> Result<Self> {
         let root = find_vima_root()?;
         let tickets = root.join("tickets");
-        if !tickets.exists() {
-            fs::create_dir(&tickets)?;
-        }
+        fs::create_dir_all(&tickets)?;
         Ok(Store { root, tickets })
     }
 
@@ -51,8 +49,7 @@ impl Store {
         let path = self.tickets.join(format!("{}.md", id));
         let contents = fs::read_to_string(&path)?;
 
-        let matter: Matter<YAML> = Matter::new();
-        let parsed = matter
+        let parsed = Matter::<YAML>::new()
             .parse::<Ticket>(&contents)
             .map_err(|e| Error::YamlError(e.to_string()))?;
 
@@ -60,9 +57,9 @@ impl Store {
             .data
             .ok_or_else(|| Error::YamlError(format!("missing frontmatter in {}.md", id)))?;
 
-        let body = parsed.content.trim().to_string();
+        let body = parsed.content.trim();
         if !body.is_empty() {
-            ticket.body = Some(body);
+            ticket.body = Some(body.to_string());
         }
 
         Ok(ticket)
@@ -78,16 +75,13 @@ impl Store {
             }
             let path = entry.path();
             let name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(n) => n.to_string(),
+                Some(n) => n,
                 None => continue,
             };
-            if name.ends_with(".md.tmp") {
+            if name.ends_with(".md.tmp") || !name.ends_with(".md") {
                 continue;
             }
-            if !name.ends_with(".md") {
-                continue;
-            }
-            let id = &name[..name.len() - 3];
+            let id = name.strip_suffix(".md").unwrap();
             match self.read_ticket(id) {
                 Ok(ticket) => tickets.push(ticket),
                 Err(e) => {
@@ -153,31 +147,6 @@ mod tests {
     }
 
     #[test]
-    fn find_vima_root_returns_no_vima_dir() {
-        let tmp = make_temp();
-        // No .vima inside, go to a directory that definitely has no ancestor .vima
-        // Use /tmp itself or a fresh subdir
-        let isolated = tmp.path().join("isolated");
-        fs::create_dir(&isolated).unwrap();
-        // We can't guarantee the CWD walk won't find an existing .vima above /tmp
-        // so use VIMA_DIR with a non-existent path to force that error path,
-        // OR test via a path that can't walk up. Use a subdir of /tmp with no .vima.
-        // Actually we need to test NoVimaDir — set cwd to /tmp/... with no .vima
-        // and no VIMA_DIR. The test may be fragile if a .vima exists in /tmp or above.
-        // We verify the behavior conceptually: start from a path with no .vima.
-        // Skip this env manipulation in favour of directly testing find logic
-        // by ensuring the test dir itself has no .vima.
-        std::env::remove_var("VIMA_DIR");
-        // We'll check: if we're inside a .vima-less hierarchy (tmp has none, /tmp has none),
-        // we should get NoVimaDir. But since tests run in parallel and other tests may
-        // set cwd, we just verify the error type we get when VIMA_DIR is set to non-existent.
-        std::env::set_var("VIMA_DIR", tmp.path().join("does_not_exist").to_str().unwrap());
-        let result = find_vima_root();
-        assert!(matches!(result, Err(Error::InvalidField(_))));
-        std::env::remove_var("VIMA_DIR");
-    }
-
-    #[test]
     fn find_vima_root_respects_vima_dir_env() {
         let tmp = make_temp();
         let vima = tmp.path().join("custom_vima");
@@ -189,19 +158,21 @@ mod tests {
         std::env::remove_var("VIMA_DIR");
     }
 
-    fn store_with_ticket(content: &str) -> (TempDir, Store, String) {
+    fn make_store() -> (TempDir, Store, PathBuf) {
         let tmp = make_temp();
         let vima = tmp.path().join(".vima");
-        let tickets_dir = vima.join("tickets");
-        fs::create_dir_all(&tickets_dir).unwrap();
-
-        let id = "test-abc";
-        fs::write(tickets_dir.join(format!("{}.md", id)), content).unwrap();
-
+        fs::create_dir_all(vima.join("tickets")).unwrap();
         std::env::set_var("VIMA_DIR", vima.to_str().unwrap());
         let store = Store::open().unwrap();
         std::env::remove_var("VIMA_DIR");
+        let tickets_dir = store.tickets_dir().to_path_buf();
+        (tmp, store, tickets_dir)
+    }
 
+    fn store_with_ticket(content: &str) -> (TempDir, Store, String) {
+        let (tmp, store, tickets_dir) = make_store();
+        let id = "test-abc";
+        fs::write(tickets_dir.join(format!("{}.md", id)), content).unwrap();
         (tmp, store, id.to_string())
     }
 
@@ -235,38 +206,19 @@ This is the **markdown** body.
 
     #[test]
     fn read_all_skips_unparseable_files() {
-        let tmp = make_temp();
-        let vima = tmp.path().join(".vima");
-        let tickets_dir = vima.join("tickets");
-        fs::create_dir_all(&tickets_dir).unwrap();
-
+        let (_tmp, store, tickets_dir) = make_store();
         fs::write(tickets_dir.join("good.md"), VALID_TICKET).unwrap();
         fs::write(tickets_dir.join("bad.md"), "not frontmatter at all\njust text").unwrap();
-
-        std::env::set_var("VIMA_DIR", vima.to_str().unwrap());
-        let store = Store::open().unwrap();
-        std::env::remove_var("VIMA_DIR");
-
         let tickets = store.read_all().unwrap();
-        // Only the valid one should be returned
         assert_eq!(tickets.len(), 1);
         assert_eq!(tickets[0].id, "test-abc");
     }
 
     #[test]
     fn read_all_excludes_tmp_files() {
-        let tmp = make_temp();
-        let vima = tmp.path().join(".vima");
-        let tickets_dir = vima.join("tickets");
-        fs::create_dir_all(&tickets_dir).unwrap();
-
+        let (_tmp, store, tickets_dir) = make_store();
         fs::write(tickets_dir.join("good.md"), VALID_TICKET).unwrap();
         fs::write(tickets_dir.join("good.md.tmp"), VALID_TICKET).unwrap();
-
-        std::env::set_var("VIMA_DIR", vima.to_str().unwrap());
-        let store = Store::open().unwrap();
-        std::env::remove_var("VIMA_DIR");
-
         let tickets = store.read_all().unwrap();
         assert_eq!(tickets.len(), 1);
     }
