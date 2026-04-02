@@ -739,6 +739,19 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    /// Mirror of cmd_show that writes JSON output to an arbitrary writer instead of stdout.
+    /// Used to capture output in tests without redirecting the global stdout fd.
+    fn cmd_show_to_writer<W: std::io::Write>(
+        args: cli::ShowArgs,
+        exact: bool,
+        w: &mut W,
+    ) -> Result<()> {
+        let st = store::Store::open()?;
+        let resolved = st.resolve_id(&args.id, exact)?;
+        let ticket = st.load_and_compute(&resolved)?;
+        output::output_one_to_writer(&ticket, &args.pluck, w)
+    }
+
     fn init_args(with_instructions: bool) -> cli::InitArgs {
         cli::InitArgs { with_instructions }
     }
@@ -2899,13 +2912,24 @@ mod tests {
         args.id = Some("pt-json1".to_string());
         cmd_create(args, true).unwrap();
 
-        // In non-pretty mode, output_one should work fine
-        let st = store::Store::open().unwrap();
-        let ticket = st.load_and_compute("pt-json1").unwrap();
-        let value = serde_json::to_value(&ticket).unwrap();
-        let json_str = value.to_string();
-        // No ANSI escape codes in JSON output
-        assert!(!json_str.contains("\x1b["), "ANSI codes found in JSON: {json_str}");
+        // Pre-arm colors: any accidental colorize_* call in the JSON output path
+        // would emit ANSI escape codes and cause the assertion below to fail.
+        colored::control::set_override(true);
+
+        let sa = cli::ShowArgs {
+            id: "pt-json1".to_string(),
+            pluck: None,
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        cmd_show_to_writer(sa, true, &mut buf).unwrap();
+
+        colored::control::set_override(false);
+
+        let output = String::from_utf8(buf).expect("output is not valid UTF-8");
+        assert!(
+            !output.contains("\x1b["),
+            "ANSI escape codes found in JSON output: {output}"
+        );
 
         std::env::remove_var("VIMA_DIR");
     }

@@ -4,14 +4,22 @@ use crate::deps::TreeNode;
 use crate::error::Result;
 use crate::ticket::{Status, Ticket};
 
-pub fn output_one(ticket: &Ticket, pluck: &Option<String>) -> Result<()> {
+pub(crate) fn output_one_to_writer<W: std::io::Write>(
+    ticket: &Ticket,
+    pluck: &Option<String>,
+    w: &mut W,
+) -> Result<()> {
     let value = serde_json::to_value(ticket)?;
     if let Some(fields) = pluck {
-        println!("{}", pluck_value(&value, fields));
+        writeln!(w, "{}", pluck_value(&value, fields))?;
     } else {
-        println!("{}", value);
+        writeln!(w, "{}", value)?;
     }
     Ok(())
+}
+
+pub fn output_one(ticket: &Ticket, pluck: &Option<String>) -> Result<()> {
+    output_one_to_writer(ticket, pluck, &mut std::io::stdout())
 }
 
 pub fn output_many(tickets: &[Ticket], pluck: &Option<String>, count: bool) -> Result<()> {
