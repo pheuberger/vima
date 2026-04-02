@@ -4,6 +4,7 @@ use clap::ValueEnum;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
+#[clap(rename_all = "snake_case")]
 pub enum Status {
     Open,
     InProgress,
@@ -28,6 +29,7 @@ impl fmt::Display for Status {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
+#[clap(rename_all = "snake_case")]
 pub enum TicketType {
     Bug,
     Feature,
