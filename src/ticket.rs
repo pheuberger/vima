@@ -137,16 +137,9 @@ mod tests {
         let json = serde_json::to_string(&ticket).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        // "type" appears, not "ticket_type"
         assert!(v.get("type").is_some());
         assert!(v.get("ticket_type").is_none());
-
-        // body is absent (serde(skip))
         assert!(v.get("body").is_none());
-
-        // blocks and children appear as empty arrays (skip_deserializing only affects deserialization)
-        // but since blocks/children had values they appear; let's check with empty ones
-        // Actually blocks=["x"], children=["y"] were set, they serialize
         assert_eq!(v["blocks"].as_array().unwrap().len(), 1);
     }
 
@@ -163,10 +156,8 @@ mod tests {
             "children": ["y"]
         }"#;
         let ticket: Ticket = serde_json::from_str(json).unwrap();
-        // skip_deserializing means these are always Default (empty vec)
         assert!(ticket.blocks.is_empty());
         assert!(ticket.children.is_empty());
-        // optional fields missing → None
         assert!(ticket.assignee.is_none());
         assert!(ticket.description.is_none());
     }
@@ -217,9 +208,7 @@ mod tests {
         assert_eq!(deserialized.design, original.design);
         assert_eq!(deserialized.acceptance, original.acceptance);
         assert_eq!(deserialized.notes.len(), original.notes.len());
-        // body is skipped (always None after deserialization)
         assert!(deserialized.body.is_none());
-        // blocks/children are computed (skip_deserializing → empty)
         assert!(deserialized.blocks.is_empty());
         assert!(deserialized.children.is_empty());
     }
