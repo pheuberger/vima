@@ -2431,13 +2431,23 @@ mod tests {
 
         // Verify ordering: b (closed later) should come before a
         let st = store::Store::open().unwrap();
-        let mut tickets = st.read_all().unwrap();
-        deps::compute_reverse_fields(&mut tickets);
-        let closed: Vec<_> = tickets
-            .into_iter()
-            .filter(|t| t.status == ticket::Status::Closed)
-            .collect();
-        assert_eq!(closed.len(), 2);
+        let tickets_dir = st.tickets_dir().to_path_buf();
+        let mtime_a = tickets_dir
+            .join("clsd-a.md")
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap();
+        let mtime_b = tickets_dir
+            .join("clsd-b.md")
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert!(
+            mtime_b > mtime_a,
+            "clsd-b should have a newer mtime than clsd-a (closed later)"
+        );
 
         std::env::remove_var("VIMA_DIR");
     }
