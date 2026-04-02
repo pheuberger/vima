@@ -40,11 +40,28 @@ chmod +x vima && sudo mv vima /usr/local/bin/
 cargo install --git https://github.com/pheuberger/vima
 ```
 
+## Where to initialize
+
+Initialize vima **above** your project's source tree — not inside it. This keeps ticket data out of your source repo and works naturally with multiple git worktrees:
+
+```
+~/work/
+  .vima/              # vima init here
+  my-project/         # worktree 1 — vima finds .vima/ in parent
+  my-project-wt/      # worktree 2 — same .vima/, shared tickets
+```
+
+vima walks up the directory tree from your cwd to find `.vima/`, so any subdirectory will find the store automatically. You can also set `VIMA_DIR` to point to an explicit location:
+
+```sh
+export VIMA_DIR=~/work/.vima
+```
+
 ## Quick start
 
 ```sh
-# Initialize a vima store in your project
-vima init
+# Initialize a vima store (run from the parent of your project)
+cd ~/work && vima init
 
 # Create tickets
 vima create "Set up CI pipeline" -t task -p 1
