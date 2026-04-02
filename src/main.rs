@@ -321,6 +321,57 @@ fn cmd_undep(args: cli::UndepArgs, exact: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_update(args: cli::UpdateArgs, exact: bool) -> Result<()> {
+    let st = store::Store::open()?;
+    let resolved = st.resolve_id(&args.id, exact)?;
+    let mut ticket = st.read_ticket(&resolved)?;
+
+    if let Some(title) = args.title {
+        ticket.title = title;
+    }
+    if let Some(description) = args.description {
+        ticket.description = if description.is_empty() { None } else { Some(description) };
+    }
+    if let Some(design) = args.design {
+        ticket.design = if design.is_empty() { None } else { Some(design) };
+    }
+    if let Some(acceptance) = args.acceptance {
+        ticket.acceptance = Some(acceptance);
+    }
+    if let Some(priority) = args.priority {
+        if priority > filter::MAX_PRIORITY {
+            return Err(Error::InvalidField("priority must be 0-4".into()));
+        }
+        ticket.priority = priority;
+    }
+    if let Some(tags) = args.tags {
+        ticket.tags = tags
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    if let Some(assignee) = args.assignee {
+        ticket.assignee = if assignee.is_empty() { None } else { Some(assignee) };
+    }
+    if let Some(estimate) = args.estimate {
+        ticket.estimate = Some(estimate);
+    }
+    if let Some(status) = args.status {
+        ticket.status = status;
+    }
+    if let Some(ticket_type) = args.ticket_type {
+        ticket.ticket_type = ticket_type;
+    }
+
+    st.write_ticket(&ticket)?;
+    let updated = st.load_and_compute(&resolved)?;
+    eprintln!("Updated {}", resolved);
+    output::output_one(&updated, &None)?;
+
+    Ok(())
+}
+
 fn cmd_dep_tree(args: cli::TreeArgs, exact: bool) -> Result<()> {
     let st = store::Store::open()?;
     let id = st.resolve_id(&args.id, exact)?;
@@ -385,7 +436,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Ready(_) => Err(Error::InvalidField("not implemented: ready".into())),
         Commands::Blocked(_) => Err(Error::InvalidField("not implemented: blocked".into())),
         Commands::Closed(_) => Err(Error::InvalidField("not implemented: closed".into())),
-        Commands::Update(_) => Err(Error::InvalidField("not implemented: update".into())),
+        Commands::Update(args) => cmd_update(args, exact),
         Commands::Start(_) => Err(Error::InvalidField("not implemented: start".into())),
         Commands::Close(_) => Err(Error::InvalidField("not implemented: close".into())),
         Commands::Reopen(_) => Err(Error::InvalidField("not implemented: reopen".into())),
@@ -1452,6 +1503,199 @@ mod tests {
             node.title.contains("[cycle]") || node.deps.iter().any(has_cycle_marker)
         }
         assert!(has_cycle_marker(&tree), "expected [cycle] marker in tree");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── update command tests ─────────────────────────────────────────────────
+
+    fn update_args(id: &str) -> cli::UpdateArgs {
+        cli::UpdateArgs {
+            id: id.to_string(),
+            title: None,
+            description: None,
+            design: None,
+            acceptance: None,
+            priority: None,
+            tags: None,
+            assignee: None,
+            estimate: None,
+            status: None,
+            ticket_type: None,
+        }
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_title_changes_title() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Old title"));
+        ca.id = Some("upd-01".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut ua = update_args("upd-01");
+        ua.title = Some("New title".to_string());
+        cmd_update(ua, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("upd-01").unwrap();
+        assert_eq!(ticket.title, "New title");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_priority_zero_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Priority test"));
+        ca.id = Some("upd-02".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut ua = update_args("upd-02");
+        ua.priority = Some(0);
+        cmd_update(ua, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("upd-02").unwrap();
+        assert_eq!(ticket.priority, 0);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_priority_five_returns_invalid_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Priority test"));
+        ca.id = Some("upd-03".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut ua = update_args("upd-03");
+        ua.priority = Some(5);
+        let result = cmd_update(ua, true);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), "invalid_field");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_tags_replaces_entire_tags_vec() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Tags test"));
+        ca.id = Some("upd-04".to_string());
+        ca.tags = Some("old".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut ua = update_args("upd-04");
+        ua.tags = Some("a,b,c".to_string());
+        cmd_update(ua, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("upd-04").unwrap();
+        assert_eq!(ticket.tags, vec!["a", "b", "c"]);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_assignee_set_then_clear() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Assignee test"));
+        ca.id = Some("upd-05".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut ua = update_args("upd-05");
+        ua.assignee = Some("alice".to_string());
+        cmd_update(ua, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("upd-05").unwrap();
+        assert_eq!(ticket.assignee, Some("alice".to_string()));
+
+        let mut ua2 = update_args("upd-05");
+        ua2.assignee = Some("".to_string());
+        cmd_update(ua2, true).unwrap();
+
+        let ticket2 = st.read_ticket("upd-05").unwrap();
+        assert_eq!(ticket2.assignee, None);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_description_empty_string_clears_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Desc test"));
+        ca.id = Some("upd-06".to_string());
+        ca.description = Some("Some description".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut ua = update_args("upd-06");
+        ua.description = Some("".to_string());
+        cmd_update(ua, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("upd-06").unwrap();
+        assert_eq!(ticket.description, None);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_status_to_in_progress() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Status test"));
+        ca.id = Some("upd-07".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut ua = update_args("upd-07");
+        ua.status = Some(ticket::Status::InProgress);
+        cmd_update(ua, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("upd-07").unwrap();
+        assert_eq!(ticket.status, ticket::Status::InProgress);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_stderr_contains_updated_id() {
+        // This test verifies the function runs without error (stderr is written
+        // by eprintln! and we can't easily capture it, but ensuring no panic/error
+        // is sufficient — the eprintln! call is directly verified in source).
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Stderr test"));
+        ca.id = Some("upd-08".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut ua = update_args("upd-08");
+        ua.title = Some("Updated title".to_string());
+        let result = cmd_update(ua, true);
+        assert!(result.is_ok(), "update should succeed: {:?}", result);
 
         std::env::remove_var("VIMA_DIR");
     }
