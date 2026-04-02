@@ -2853,6 +2853,88 @@ mod tests {
         std::env::remove_var("VIMA_DIR");
     }
 
+    // ── dep cycle command tests ──────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn dep_cycle_no_cycles_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        // Create A → B → C (no cycle)
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("dc-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("dc-b".to_string());
+        b.dep = vec!["dc-a".to_string()];
+        cmd_create(b, true).unwrap();
+
+        let mut c = create_args(Some("Ticket C"));
+        c.id = Some("dc-c".to_string());
+        c.dep = vec!["dc-b".to_string()];
+        cmd_create(c, true).unwrap();
+
+        let result = cmd_dep_cycle();
+        assert!(result.is_ok(), "dep cycle with no cycles should return Ok: {:?}", result);
+
+        // Verify the underlying data matches expected JSON output {"cycles": []}
+        let st = store::Store::open().unwrap();
+        let tickets = st.read_all().unwrap();
+        let cycles = deps::detect_all_cycles(&tickets);
+        assert_eq!(
+            serde_json::json!({ "cycles": cycles }),
+            serde_json::json!({ "cycles": Vec::<Vec<String>>::new() }),
+            "no-cycle graph should produce empty cycles JSON"
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn dep_cycle_detects_cycle_via_detect_all_cycles() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        // Create A and B without deps first
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("dcc-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("dcc-b".to_string());
+        cmd_create(b, true).unwrap();
+
+        // Manually introduce A→B and B→A to bypass would_create_cycle
+        let st = store::Store::open().unwrap();
+        let mut ticket_a = st.read_ticket("dcc-a").unwrap();
+        ticket_a.deps = vec!["dcc-b".to_string()];
+        st.write_ticket(&ticket_a).unwrap();
+
+        let mut ticket_b = st.read_ticket("dcc-b").unwrap();
+        ticket_b.deps = vec!["dcc-a".to_string()];
+        st.write_ticket(&ticket_b).unwrap();
+
+        // detect_all_cycles (the core of cmd_dep_cycle) must find exactly one cycle
+        let tickets = st.read_all().unwrap();
+        let cycles = deps::detect_all_cycles(&tickets);
+        assert!(!cycles.is_empty(), "should detect a cycle between dcc-a and dcc-b");
+        assert_eq!(cycles.len(), 1, "expected exactly one cycle");
+        let cycle = &cycles[0];
+        assert!(
+            cycle.contains(&"dcc-a".to_string()),
+            "cycle should contain dcc-a"
+        );
+        assert!(
+            cycle.contains(&"dcc-b".to_string()),
+            "cycle should contain dcc-b"
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
     // ── pretty output integration tests ─────────────────────────────────────
 
     #[test]
