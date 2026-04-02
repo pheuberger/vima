@@ -369,24 +369,28 @@ fn cmd_update(args: cli::UpdateArgs, exact: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_start(args: cli::IdArgs, exact: bool) -> Result<()> {
+fn cmd_set_status(id: &str, exact: bool, target: ticket::Status, verb: &str) -> Result<()> {
     let st = store::Store::open()?;
-    let resolved = st.resolve_id(&args.id, exact)?;
+    let resolved = st.resolve_id(id, exact)?;
     let mut ticket = st.read_ticket(&resolved)?;
 
-    if ticket.status == ticket::Status::InProgress {
+    if ticket.status == target {
         let current = st.load_and_compute(&resolved)?;
         output::output_one(&current, &None)?;
         return Ok(());
     }
 
-    ticket.status = ticket::Status::InProgress;
+    ticket.status = target;
     st.write_ticket(&ticket)?;
     let updated = st.load_and_compute(&resolved)?;
-    eprintln!("Started {}", resolved);
+    eprintln!("{} {}", verb, resolved);
     output::output_one(&updated, &None)?;
 
     Ok(())
+}
+
+fn cmd_start(args: cli::IdArgs, exact: bool) -> Result<()> {
+    cmd_set_status(&args.id, exact, ticket::Status::InProgress, "Started")
 }
 
 fn cmd_close(args: cli::CloseArgs, exact: bool) -> Result<()> {
@@ -416,29 +420,13 @@ fn cmd_close(args: cli::CloseArgs, exact: bool) -> Result<()> {
         closed_tickets.push(updated);
     }
 
-    println!("{}", serde_json::to_string(&closed_tickets)?);
+    output::output_many(&closed_tickets, &None, false)?;
 
     Ok(())
 }
 
 fn cmd_reopen(args: cli::IdArgs, exact: bool) -> Result<()> {
-    let st = store::Store::open()?;
-    let resolved = st.resolve_id(&args.id, exact)?;
-    let mut ticket = st.read_ticket(&resolved)?;
-
-    if ticket.status == ticket::Status::Open {
-        let current = st.load_and_compute(&resolved)?;
-        output::output_one(&current, &None)?;
-        return Ok(());
-    }
-
-    ticket.status = ticket::Status::Open;
-    st.write_ticket(&ticket)?;
-    let updated = st.load_and_compute(&resolved)?;
-    eprintln!("Reopened {}", resolved);
-    output::output_one(&updated, &None)?;
-
-    Ok(())
+    cmd_set_status(&args.id, exact, ticket::Status::Open, "Reopened")
 }
 
 fn cmd_dep_tree(args: cli::TreeArgs, exact: bool) -> Result<()> {
@@ -1777,10 +1765,6 @@ mod tests {
         }
     }
 
-    fn reopen_args(id: &str) -> cli::IdArgs {
-        cli::IdArgs { id: id.to_string() }
-    }
-
     #[test]
     #[serial(env)]
     fn start_sets_status_to_in_progress() {
@@ -1927,7 +1911,7 @@ mod tests {
         cmd_create(ca, false).unwrap();
 
         cmd_close(close_args(vec!["ro-01"]), true).unwrap();
-        cmd_reopen(reopen_args("ro-01"), true).unwrap();
+        cmd_reopen(start_args("ro-01"), true).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("ro-01").unwrap();
@@ -1946,7 +1930,7 @@ mod tests {
         ca.id = Some("ro-02".to_string());
         cmd_create(ca, false).unwrap();
 
-        let result = cmd_reopen(reopen_args("ro-02"), true);
+        let result = cmd_reopen(start_args("ro-02"), true);
         assert!(result.is_ok(), "reopen of open ticket should succeed: {:?}", result);
 
         let st = store::Store::open().unwrap();
@@ -1967,7 +1951,7 @@ mod tests {
         cmd_create(ca, false).unwrap();
 
         cmd_start(start_args("ro-03"), true).unwrap();
-        cmd_reopen(reopen_args("ro-03"), true).unwrap();
+        cmd_reopen(start_args("ro-03"), true).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("ro-03").unwrap();
