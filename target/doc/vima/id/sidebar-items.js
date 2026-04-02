@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["ALPHANUMERIC"],"fn":["generate_id","get_prefix","resolve_id","validate_id"]};

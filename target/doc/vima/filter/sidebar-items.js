@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["MAX_PRIORITY"],"fn":["apply_filters","parse_priority_range"],"struct":["Filter"]};

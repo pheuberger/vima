@@ -1,2 +1,0 @@
-createSrcSidebar('[["vima",["",[],["cli.rs","error.rs","filter.rs","id.rs","main.rs","ticket.rs"]]],["vima",["",[],["cli.rs","error.rs","filter.rs","main.rs","ticket.rs"]]]]');
-//{"start":19,"fragment_lengths":[80,73]}
