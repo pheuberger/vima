@@ -2,6 +2,8 @@ use std::fmt;
 use crate::cli::FilterArgs;
 use crate::ticket::{Status, Ticket, TicketType};
 
+const MAX_PRIORITY: u8 = 4;
+
 #[derive(Debug)]
 pub enum FilterError {
     InvalidField(String),
@@ -33,11 +35,8 @@ impl Filter {
                 return false;
             }
         }
-        if !self.tags.is_empty() {
-            let has_match = self.tags.iter().any(|t| ticket.tags.contains(t));
-            if !has_match {
-                return false;
-            }
+        if !self.tags.is_empty() && !self.tags.iter().any(|t| ticket.tags.contains(t)) {
+            return false;
         }
         if let Some(ref tt) = self.ticket_type {
             if &ticket.ticket_type != tt {
@@ -58,10 +57,7 @@ impl Filter {
     }
 
     pub fn from_args(args: &FilterArgs) -> Result<Filter, FilterError> {
-        let priority_range = match &args.priority {
-            Some(s) => Some(parse_priority_range(s)?),
-            None => None,
-        };
+        let priority_range = args.priority.as_deref().map(parse_priority_range).transpose()?;
         Ok(Filter {
             status: args.status.clone(),
             tags: args.tag.clone(),
@@ -74,22 +70,21 @@ impl Filter {
 }
 
 pub fn parse_priority_range(s: &str) -> Result<(u8, u8), FilterError> {
-    let parts: Vec<&str> = s.splitn(2, '-').collect();
-    match parts.as_slice() {
-        [single] => {
-            let n: u8 = single
+    match s.split_once('-') {
+        None => {
+            let n: u8 = s
                 .trim()
                 .parse()
                 .map_err(|_| FilterError::InvalidField(format!("invalid priority: {}", s)))?;
-            if n > 4 {
+            if n > MAX_PRIORITY {
                 return Err(FilterError::InvalidField(format!(
-                    "priority {} out of range (max 4)",
-                    n
+                    "priority {} out of range (max {})",
+                    n, MAX_PRIORITY
                 )));
             }
             Ok((n, n))
         }
-        [lo_str, hi_str] => {
+        Some((lo_str, hi_str)) => {
             let lo: u8 = lo_str
                 .trim()
                 .parse()
@@ -104,23 +99,19 @@ pub fn parse_priority_range(s: &str) -> Result<(u8, u8), FilterError> {
                     lo, hi
                 )));
             }
-            if hi > 4 {
+            if hi > MAX_PRIORITY {
                 return Err(FilterError::InvalidField(format!(
-                    "priority hi {} out of range (max 4)",
-                    hi
+                    "priority hi {} out of range (max {})",
+                    hi, MAX_PRIORITY
                 )));
             }
             Ok((lo, hi))
         }
-        _ => Err(FilterError::InvalidField(format!(
-            "invalid priority range: {}",
-            s
-        ))),
     }
 }
 
 pub fn apply_filters(tickets: Vec<Ticket>, filter: &Filter) -> Vec<Ticket> {
-    let mut result: Vec<Ticket> = tickets.into_iter().filter(|t| filter.matches(t)).collect();
+    let mut result = tickets.into_iter().filter(|t| filter.matches(t)).collect::<Vec<_>>();
     result.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
     if let Some(limit) = filter.limit {
         result.truncate(limit);
