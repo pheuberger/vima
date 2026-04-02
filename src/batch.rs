@@ -301,6 +301,12 @@ fn batch_create_reader<R: BufRead>(store: &Store, reader: R, exact: bool) -> Res
 
         let ticket_id = ticket.id.clone();
 
+        // Push ticket_id before the blocks loop so that if blocks processing
+        // fails (e.g. cycle detected), wrap_batch_error correctly lists this
+        // ticket among the already-created IDs.
+        created_ids.push(ticket_id.clone());
+        created_tickets.push(ticket);
+
         // Handle "blocks": add ticket_id to each target's deps
         let blocks = get_string_array(&spec, "blocks");
         if !blocks.is_empty() {
@@ -326,9 +332,6 @@ fn batch_create_reader<R: BufRead>(store: &Store, reader: R, exact: bool) -> Res
                     .map_err(|e| wrap_batch_error(line_num, e, &created_ids))?;
             }
         }
-
-        created_ids.push(ticket_id);
-        created_tickets.push(ticket);
     }
 
     Ok(created_tickets)
@@ -517,6 +520,31 @@ mod tests {
         // The cycle error is wrapped in InvalidField
         assert!(matches!(err, Error::InvalidField(_)));
         assert!(msg.contains("cycle") || msg.contains("already created"), "unexpected: {msg}");
+
+        // Both t1 and t2 are persisted on disk even though blocks processing failed.
+        // The error message must list both IDs so the user knows what to clean up.
+        assert!(
+            msg.contains("t1"),
+            "error should mention t1 in already-created list: {msg}"
+        );
+        assert!(
+            msg.contains("t2"),
+            "error should mention t2 in already-created list: {msg}"
+        );
+
+        // t2 should have dep on t1, but t1 must NOT have dep on t2 (blocks failed).
+        let t2 = store.read_ticket("t2").unwrap();
+        assert!(
+            t2.deps.iter().any(|d| d == "t1"),
+            "t2 should depend on t1: {:?}",
+            t2.deps
+        );
+        let t1 = store.read_ticket("t1").unwrap();
+        assert!(
+            !t1.deps.iter().any(|d| d == "t2"),
+            "t1 must NOT depend on t2 (blocks cycle was rejected): {:?}",
+            t1.deps
+        );
     }
 
     #[test]
