@@ -68,7 +68,7 @@ fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
         .ok_or_else(|| Error::InvalidField("title is required".into()))?;
 
     if let Some(p) = args.priority {
-        if p > 4 {
+        if p > filter::MAX_PRIORITY {
             return Err(Error::InvalidField("priority must be 0-4".into()));
         }
     }

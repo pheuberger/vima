@@ -31,13 +31,13 @@ pub fn output_many(tickets: &[Ticket], pluck: &Option<String>, count: bool) -> R
 pub fn pluck_value(value: &serde_json::Value, fields: &str) -> serde_json::Value {
     let parts: Vec<&str> = fields.split(',').map(|s| s.trim()).collect();
     if parts.len() == 1 {
-        value.get(parts[0]).cloned().unwrap_or(serde_json::Value::Null)
+        value.get(parts[0]).cloned().unwrap_or_default()
     } else {
         let mut obj = serde_json::Map::new();
         for field in parts {
             obj.insert(
                 field.to_string(),
-                value.get(field).cloned().unwrap_or(serde_json::Value::Null),
+                value.get(field).cloned().unwrap_or_default(),
             );
         }
         serde_json::Value::Object(obj)
@@ -50,10 +50,6 @@ pub fn output_plucked(values: &[serde_json::Value], fields: &str) {
         .map(|v| pluck_value(v, fields))
         .collect();
     println!("{}", serde_json::Value::Array(result));
-}
-
-pub fn log(msg: &str) {
-    eprintln!("{}", msg);
 }
 
 #[cfg(test)]

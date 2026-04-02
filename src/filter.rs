@@ -2,7 +2,7 @@ use crate::cli::FilterArgs;
 use crate::error::Error;
 use crate::ticket::{Status, Ticket, TicketType};
 
-const MAX_PRIORITY: u8 = 4;
+pub const MAX_PRIORITY: u8 = 4;
 
 pub struct Filter {
     pub status: Option<Status>,
