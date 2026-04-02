@@ -524,7 +524,7 @@ fn cmd_list(args: cli::FilterArgs, pretty: bool) -> Result<()> {
     }
 }
 
-fn cmd_closed(args: cli::ClosedArgs, pretty: bool) -> Result<()> {
+fn closed_collect(args: &cli::ClosedArgs) -> Result<Vec<ticket::Ticket>> {
     let st = store::Store::open()?;
     let mut tickets = st.read_all()?;
     deps::compute_reverse_fields(&mut tickets);
@@ -543,7 +543,7 @@ fn cmd_closed(args: cli::ClosedArgs, pretty: bool) -> Result<()> {
         tickets.into_iter().filter(|t| filter.matches(t)).collect();
 
     // Sort by mtime DESC — pre-collect to avoid O(n log n) filesystem calls
-    let tickets_dir = st.tickets_dir();
+    let tickets_dir = st.tickets_dir().to_path_buf();
     let mtimes: std::collections::HashMap<String, Option<std::time::SystemTime>> = filtered
         .iter()
         .map(|t| {
@@ -561,6 +561,12 @@ fn cmd_closed(args: cli::ClosedArgs, pretty: bool) -> Result<()> {
     if let Some(limit) = filter.limit {
         filtered.truncate(limit);
     }
+
+    Ok(filtered)
+}
+
+fn cmd_closed(args: cli::ClosedArgs, pretty: bool) -> Result<()> {
+    let filtered = closed_collect(&args)?;
 
     if pretty {
         output::pretty_list(&filtered)
@@ -2429,24 +2435,15 @@ mod tests {
         let result = cmd_closed(closed_args_default(), false);
         assert!(result.is_ok(), "closed failed: {:?}", result);
 
-        // Verify ordering: b (closed later) should come before a
-        let st = store::Store::open().unwrap();
-        let tickets_dir = st.tickets_dir().to_path_buf();
-        let mtime_a = tickets_dir
-            .join("clsd-a.md")
-            .metadata()
-            .unwrap()
-            .modified()
-            .unwrap();
-        let mtime_b = tickets_dir
-            .join("clsd-b.md")
-            .metadata()
-            .unwrap()
-            .modified()
-            .unwrap();
+        // Verify ordering: b (closed later) should appear before a in cmd_closed output
+        let sorted = closed_collect(&closed_args_default()).unwrap();
+        let ids: Vec<&str> = sorted.iter().map(|t| t.id.as_str()).collect();
+        let idx_b = ids.iter().position(|&id| id == "clsd-b").unwrap();
+        let idx_a = ids.iter().position(|&id| id == "clsd-a").unwrap();
         assert!(
-            mtime_b > mtime_a,
-            "clsd-b should have a newer mtime than clsd-a (closed later)"
+            idx_b < idx_a,
+            "clsd-b (closed later) should appear before clsd-a in sorted output, got order: {:?}",
+            ids
         );
 
         std::env::remove_var("VIMA_DIR");
