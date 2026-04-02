@@ -299,17 +299,16 @@ fn batch_create_reader<R: BufRead>(store: &Store, reader: R, exact: bool) -> Res
         let ticket = create_from_spec(store, &spec, &created_ids, exact)
             .map_err(|e| wrap_batch_error(line_num, e, &created_ids))?;
 
-        let ticket_id = ticket.id.clone();
-
         // Push ticket_id before the blocks loop so that if blocks processing
         // fails (e.g. cycle detected), wrap_batch_error correctly lists this
         // ticket among the already-created IDs.
-        created_ids.push(ticket_id.clone());
+        created_ids.push(ticket.id.clone());
         created_tickets.push(ticket);
 
         // Handle "blocks": add ticket_id to each target's deps
         let blocks = get_string_array(&spec, "blocks");
         if !blocks.is_empty() {
+            let ticket_id = created_ids.last().unwrap().as_str();
             // Read once for all cycle checks on this line's block targets.
             // Re-reading after each add_dep is unnecessary: the newly added edges
             // (target → ticket_id) cannot affect cycle detection for other targets
@@ -319,7 +318,7 @@ fn batch_create_reader<R: BufRead>(store: &Store, reader: R, exact: bool) -> Res
                 .map_err(|e| wrap_batch_error(line_num, e, &created_ids))?;
             for block_target in &blocks {
                 if let Some(cycle_path) =
-                    deps::would_create_cycle(&tickets, block_target, &ticket_id)
+                    deps::would_create_cycle(&tickets, block_target, ticket_id)
                 {
                     return Err(wrap_batch_error(
                         line_num,
@@ -328,7 +327,7 @@ fn batch_create_reader<R: BufRead>(store: &Store, reader: R, exact: bool) -> Res
                     ));
                 }
                 store
-                    .add_dep(block_target, &ticket_id)
+                    .add_dep(block_target, ticket_id)
                     .map_err(|e| wrap_batch_error(line_num, e, &created_ids))?;
             }
         }
@@ -535,13 +534,13 @@ mod tests {
         // t2 should have dep on t1, but t1 must NOT have dep on t2 (blocks failed).
         let t2 = store.read_ticket("t2").unwrap();
         assert!(
-            t2.deps.iter().any(|d| d == "t1"),
+            t2.deps.contains(&"t1".to_string()),
             "t2 should depend on t1: {:?}",
             t2.deps
         );
         let t1 = store.read_ticket("t1").unwrap();
         assert!(
-            !t1.deps.iter().any(|d| d == "t2"),
+            !t1.deps.contains(&"t2".to_string()),
             "t1 must NOT depend on t2 (blocks cycle was rejected): {:?}",
             t1.deps
         );
