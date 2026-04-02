@@ -260,7 +260,7 @@ pub struct CloseArgs {
 
 #[derive(Args, Debug)]
 pub struct InitArgs {
-    /// Also create a .vima/instructions.md template
+    /// Create CLAUDE.md in current directory with vima usage instructions for AI agents
     #[arg(long)]
     pub with_instructions: bool,
 }
