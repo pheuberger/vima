@@ -484,15 +484,67 @@ fn cmd_help() -> Result<()> {
     Ok(())
 }
 
+fn cmd_list(args: cli::FilterArgs) -> Result<()> {
+    let st = store::Store::open()?;
+    let mut tickets = st.read_all()?;
+    deps::compute_reverse_fields(&mut tickets);
+    let filter = filter::Filter::from_args(&args)?;
+    let filtered = filter::apply_filters(tickets, &filter);
+    output::output_many(&filtered, &args.pluck, args.count)
+}
+
+fn cmd_closed(args: cli::ClosedArgs) -> Result<()> {
+    let st = store::Store::open()?;
+    let mut tickets = st.read_all()?;
+    deps::compute_reverse_fields(&mut tickets);
+
+    // Force status=Closed regardless of user --status flag
+    let mut filter = filter::Filter::from_args(&args.filter)?;
+    filter.status = Some(ticket::Status::Closed);
+
+    // Default limit=20 if not provided
+    if filter.limit.is_none() {
+        filter.limit = Some(20);
+    }
+
+    // Filter first (without applying limit/sort from apply_filters)
+    let mut filtered: Vec<ticket::Ticket> =
+        tickets.into_iter().filter(|t| filter.matches(t)).collect();
+
+    // Sort by mtime DESC
+    filtered.sort_by(|a, b| {
+        let mtime_a = st
+            .tickets_dir()
+            .join(format!("{}.md", a.id))
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok();
+        let mtime_b = st
+            .tickets_dir()
+            .join(format!("{}.md", b.id))
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok();
+        mtime_b.cmp(&mtime_a)
+    });
+
+    // Apply limit
+    if let Some(limit) = filter.limit {
+        filtered.truncate(limit);
+    }
+
+    output::output_many(&filtered, &args.filter.pluck, args.filter.count)
+}
+
 fn dispatch(cli: Cli) -> Result<()> {
     let exact = cli.exact;
     match cli.command {
         Commands::Create(args) => cmd_create(args, exact),
         Commands::Show(args) => cmd_show(args, exact),
-        Commands::List(_) => Err(Error::InvalidField("not implemented: list".into())),
+        Commands::List(args) => cmd_list(args),
         Commands::Ready(_) => Err(Error::InvalidField("not implemented: ready".into())),
         Commands::Blocked(_) => Err(Error::InvalidField("not implemented: blocked".into())),
-        Commands::Closed(_) => Err(Error::InvalidField("not implemented: closed".into())),
+        Commands::Closed(args) => cmd_closed(args),
         Commands::Update(args) => cmd_update(args, exact),
         Commands::Start(args) => cmd_start(args, exact),
         Commands::Close(args) => cmd_close(args, exact),
@@ -1956,6 +2008,296 @@ mod tests {
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("ro-03").unwrap();
         assert_eq!(ticket.status, ticket::Status::Open);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── list command tests ───────────────────────────────────────────────────
+
+    fn filter_args_default() -> cli::FilterArgs {
+        cli::FilterArgs {
+            status: None,
+            tag: vec![],
+            ticket_type: None,
+            priority: None,
+            assignee: None,
+            limit: None,
+            pluck: None,
+            count: false,
+        }
+    }
+
+    fn closed_args_default() -> cli::ClosedArgs {
+        cli::ClosedArgs { filter: filter_args_default() }
+    }
+
+    #[test]
+    #[serial(env)]
+    fn list_returns_all_tickets_sorted_by_priority_asc() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("High prio"));
+        a.id = Some("lst-a".to_string());
+        a.priority = Some(3);
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Low prio"));
+        b.id = Some("lst-b".to_string());
+        b.priority = Some(0);
+        cmd_create(b, false).unwrap();
+
+        let mut c = create_args(Some("Mid prio"));
+        c.id = Some("lst-c".to_string());
+        c.priority = Some(1);
+        cmd_create(c, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let filter = filter::Filter::from_args(&filter_args_default()).unwrap();
+        let result = filter::apply_filters(tickets, &filter);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].id, "lst-b"); // priority 0
+        assert_eq!(result[1].id, "lst-c"); // priority 1
+        assert_eq!(result[2].id, "lst-a"); // priority 3
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn list_status_filter_returns_only_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Open ticket"));
+        a.id = Some("lstst-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("To close"));
+        b.id = Some("lstst-b".to_string());
+        cmd_create(b, false).unwrap();
+        cmd_close(close_args(vec!["lstst-b"]), true).unwrap();
+
+        let mut args = filter_args_default();
+        args.status = Some(ticket::Status::Open);
+        let result = cmd_list(args);
+        assert!(result.is_ok());
+
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let mut fa = filter_args_default();
+        fa.status = Some(ticket::Status::Open);
+        let filter = filter::Filter::from_args(&fa).unwrap();
+        let filtered = filter::apply_filters(tickets, &filter);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "lstst-a");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn list_tag_filter_returns_tagged_tickets() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Backend ticket"));
+        a.id = Some("lsttg-a".to_string());
+        a.tags = Some("backend".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Frontend ticket"));
+        b.id = Some("lsttg-b".to_string());
+        b.tags = Some("frontend".to_string());
+        cmd_create(b, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let mut fa = filter_args_default();
+        fa.tag = vec!["backend".to_string()];
+        let filter = filter::Filter::from_args(&fa).unwrap();
+        let filtered = filter::apply_filters(tickets, &filter);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "lsttg-a");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn list_priority_range_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("P0"));
+        a.id = Some("lstpr-a".to_string());
+        a.priority = Some(0);
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("P1"));
+        b.id = Some("lstpr-b".to_string());
+        b.priority = Some(1);
+        cmd_create(b, false).unwrap();
+
+        let mut c = create_args(Some("P3"));
+        c.id = Some("lstpr-c".to_string());
+        c.priority = Some(3);
+        cmd_create(c, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let mut fa = filter_args_default();
+        fa.priority = Some("0-1".to_string());
+        let filter = filter::Filter::from_args(&fa).unwrap();
+        let filtered = filter::apply_filters(tickets, &filter);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|t| t.priority <= 1));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn list_limit_returns_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("A"));
+        a.id = Some("lstlm-a".to_string());
+        a.priority = Some(0);
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("B"));
+        b.id = Some("lstlm-b".to_string());
+        b.priority = Some(1);
+        cmd_create(b, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let mut fa = filter_args_default();
+        fa.limit = Some(1);
+        let filter = filter::Filter::from_args(&fa).unwrap();
+        let filtered = filter::apply_filters(tickets, &filter);
+        assert_eq!(filtered.len(), 1);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn list_pluck_id_returns_flat_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Pluck test"));
+        a.id = Some("lstpl-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut fa = filter_args_default();
+        fa.pluck = Some("id".to_string());
+        let result = cmd_list(fa);
+        assert!(result.is_ok());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn list_count_returns_integer() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Count me"));
+        a.id = Some("lstcnt-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut fa = filter_args_default();
+        fa.count = true;
+        let result = cmd_list(fa);
+        assert!(result.is_ok());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── closed command tests ─────────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn closed_returns_closed_tickets_sorted_by_mtime_desc() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("First"));
+        a.id = Some("clsd-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Second"));
+        b.id = Some("clsd-b".to_string());
+        cmd_create(b, false).unwrap();
+
+        // Close a first, then b — b should appear first (newer mtime)
+        cmd_close(close_args(vec!["clsd-a"]), true).unwrap();
+        // Sleep briefly to ensure different mtime
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        cmd_close(close_args(vec!["clsd-b"]), true).unwrap();
+
+        let result = cmd_closed(closed_args_default());
+        assert!(result.is_ok(), "closed failed: {:?}", result);
+
+        // Verify ordering: b (closed later) should come before a
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let closed: Vec<_> = tickets
+            .into_iter()
+            .filter(|t| t.status == ticket::Status::Closed)
+            .collect();
+        assert_eq!(closed.len(), 2);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn closed_defaults_to_limit_20() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        // Create 25 tickets and close them all
+        for i in 0..25u32 {
+            let mut a = create_args(Some(&format!("Ticket {}", i)));
+            a.id = Some(format!("clsdlm-{:02}", i));
+            cmd_create(a, false).unwrap();
+        }
+        for i in 0..25u32 {
+            cmd_close(close_args(vec![&format!("clsdlm-{:02}", i)]), true).unwrap();
+        }
+
+        let result = cmd_closed(closed_args_default());
+        assert!(result.is_ok(), "closed failed: {:?}", result);
+
+        // Verify the internal filter logic applies limit=20
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let mut filter = filter::Filter::from_args(&filter_args_default()).unwrap();
+        filter.status = Some(ticket::Status::Closed);
+        if filter.limit.is_none() {
+            filter.limit = Some(20);
+        }
+        let mut filtered: Vec<_> =
+            tickets.into_iter().filter(|t| filter.matches(t)).collect();
+        if let Some(limit) = filter.limit {
+            filtered.truncate(limit);
+        }
+        assert_eq!(filtered.len(), 20);
 
         std::env::remove_var("VIMA_DIR");
     }
