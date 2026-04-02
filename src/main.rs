@@ -107,6 +107,17 @@ fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
         .map(|dep| st.resolve_id(dep, exact))
         .collect::<Result<Vec<_>>>()?;
 
+    // Cycle detection for --dep: new ticket can't be in any existing chain,
+    // so this is always a no-op today but enforces the invariant going forward.
+    {
+        let tickets = st.read_all()?;
+        for dep in &deps {
+            if let Some(cycle_path) = deps::would_create_cycle(&tickets, &ticket_id, dep) {
+                return Err(Error::Cycle(cycle_path));
+            }
+        }
+    }
+
     let parent = args
         .parent
         .map(|p| st.resolve_id(&p, exact))
@@ -246,6 +257,69 @@ fn cmd_unlink(args: cli::LinkArgs, exact: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_dep_add(args: cli::AddDepArgs, exact: bool) -> Result<()> {
+    let st = store::Store::open()?;
+    let id = st.resolve_id(&args.id, exact)?;
+    let dep_id = st.resolve_id(&args.dep_id, exact)?;
+
+    // In --blocks mode: id blocks dep_id → add id to dep_id's deps list.
+    // In normal mode:   id depends on dep_id → add dep_id to id's deps list.
+    let (target_id, added_dep) = if args.blocks {
+        (dep_id.clone(), id.clone())
+    } else {
+        (id.clone(), dep_id.clone())
+    };
+
+    let mut target = st.read_ticket(&target_id)?;
+
+    // Duplicate check — no-op if dep already present
+    if target.deps.contains(&added_dep) {
+        let updated = st.load_and_compute(&target_id)?;
+        output::output_one(&updated, &None)?;
+        return Ok(());
+    }
+
+    // Cycle detection before write
+    let tickets = st.read_all()?;
+    if let Some(cycle_path) = deps::would_create_cycle(&tickets, &target_id, &added_dep) {
+        return Err(Error::Cycle(cycle_path));
+    }
+
+    target.deps.push(added_dep.clone());
+    st.write_ticket(&target)?;
+
+    let updated = st.load_and_compute(&target_id)?;
+    if args.blocks {
+        eprintln!("Added dep {} to {}", id, dep_id);
+    } else {
+        eprintln!("Added dep {} to {}", dep_id, id);
+    }
+    output::output_one(&updated, &None)?;
+
+    Ok(())
+}
+
+fn cmd_undep(args: cli::UndepArgs, exact: bool) -> Result<()> {
+    let st = store::Store::open()?;
+    let id = st.resolve_id(&args.id, exact)?;
+    let dep_id = st.resolve_id(&args.dep_id, exact)?;
+
+    let mut ticket = st.read_ticket(&id)?;
+
+    if !ticket.deps.contains(&dep_id) {
+        return Err(Error::InvalidField("dep not found".into()));
+    }
+
+    ticket.deps.retain(|d| d != &dep_id);
+    st.write_ticket(&ticket)?;
+
+    let updated = st.load_and_compute(&id)?;
+    eprintln!("Removed dep {} from {}", dep_id, id);
+    output::output_one(&updated, &None)?;
+
+    Ok(())
+}
+
 fn cmd_init(args: cli::InitArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let vima_dir = cwd.join(".vima");
@@ -289,8 +363,12 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Reopen(_) => Err(Error::InvalidField("not implemented: reopen".into())),
         Commands::IsReady(_) => Err(Error::InvalidField("not implemented: is-ready".into())),
         Commands::AddNote(args) => cmd_add_note(args, exact),
-        Commands::Dep(_) => Err(Error::InvalidField("not implemented: dep".into())),
-        Commands::Undep(_) => Err(Error::InvalidField("not implemented: undep".into())),
+        Commands::Dep(dep_args) => match dep_args.command {
+            cli::DepCommands::Add(add_args) => cmd_dep_add(add_args, exact),
+            cli::DepCommands::Tree(_) => Err(Error::InvalidField("not implemented: dep tree".into())),
+            cli::DepCommands::Cycle => Err(Error::InvalidField("not implemented: dep cycle".into())),
+        },
+        Commands::Undep(args) => cmd_undep(args, exact),
         Commands::Link(args) => cmd_link(args, exact),
         Commands::Unlink(args) => cmd_unlink(args, exact),
         Commands::Init(args) => cmd_init(args),
@@ -963,6 +1041,180 @@ mod tests {
         // Unlink when never linked — should succeed without error
         let result = cmd_unlink(link_args("nul-a", "nul-b"), true);
         assert!(result.is_ok());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── dep add command tests ────────────────────────────────────────────────
+
+    fn add_dep_args(id: &str, dep_id: &str, blocks: bool) -> cli::AddDepArgs {
+        cli::AddDepArgs {
+            id: id.to_string(),
+            dep_id: dep_id.to_string(),
+            blocks,
+        }
+    }
+
+    fn undep_args(id: &str, dep_id: &str) -> cli::UndepArgs {
+        cli::UndepArgs {
+            id: id.to_string(),
+            dep_id: dep_id.to_string(),
+        }
+    }
+
+    #[test]
+    #[serial(env)]
+    fn dep_add_normal_mode_adds_dep_to_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("da-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("da-b".to_string());
+        cmd_create(b, false).unwrap();
+
+        cmd_dep_add(add_dep_args("da-a", "da-b", false), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket_a = st.read_ticket("da-a").unwrap();
+        assert!(ticket_a.deps.contains(&"da-b".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn dep_add_blocks_mode_adds_id_to_dep_id_deps() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("db-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("db-b".to_string());
+        cmd_create(b, false).unwrap();
+
+        // A blocks B → B's deps should contain A
+        cmd_dep_add(add_dep_args("db-a", "db-b", true), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket_b = st.read_ticket("db-b").unwrap();
+        assert!(ticket_b.deps.contains(&"db-a".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn dep_add_idempotent_no_duplicate() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("dd-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("dd-b".to_string());
+        cmd_create(b, false).unwrap();
+
+        cmd_dep_add(add_dep_args("dd-a", "dd-b", false), true).unwrap();
+        cmd_dep_add(add_dep_args("dd-a", "dd-b", false), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket_a = st.read_ticket("dd-a").unwrap();
+        assert_eq!(
+            ticket_a.deps.iter().filter(|d| *d == "dd-b").count(),
+            1,
+            "expected exactly one dep entry"
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn dep_add_cycle_detection_returns_cycle_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        // Create A -> B -> C chain
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("cy-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("cy-b".to_string());
+        b.dep = vec!["cy-a".to_string()];
+        cmd_create(b, true).unwrap();
+
+        let mut c = create_args(Some("Ticket C"));
+        c.id = Some("cy-c".to_string());
+        c.dep = vec!["cy-b".to_string()];
+        cmd_create(c, true).unwrap();
+
+        // Adding C -> A (C depends on A) would create A -> B -> C -> A cycle
+        let result = cmd_dep_add(add_dep_args("cy-a", "cy-c", false), true);
+        assert!(result.is_err(), "expected cycle error");
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "cycle");
+        assert_eq!(err.exit_code(), 2);
+
+        // Verify error JSON contains "cycle" array
+        let json = error::error_json(&err);
+        assert!(json["cycle"].is_array(), "expected 'cycle' key in error json");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn undep_removes_dep_from_ticket() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("ud-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("ud-b".to_string());
+        b.dep = vec!["ud-a".to_string()];
+        cmd_create(b, true).unwrap();
+
+        cmd_undep(undep_args("ud-b", "ud-a"), true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket_b = st.read_ticket("ud-b").unwrap();
+        assert!(!ticket_b.deps.contains(&"ud-a".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn undep_dep_not_in_list_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ticket A"));
+        a.id = Some("ue-a".to_string());
+        cmd_create(a, false).unwrap();
+
+        let mut b = create_args(Some("Ticket B"));
+        b.id = Some("ue-b".to_string());
+        cmd_create(b, false).unwrap();
+
+        let result = cmd_undep(undep_args("ue-a", "ue-b"), true);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "invalid_field");
+        assert!(err.to_string().contains("dep not found"));
 
         std::env::remove_var("VIMA_DIR");
     }
