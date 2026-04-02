@@ -544,20 +544,142 @@ fn cmd_closed(args: cli::ClosedArgs) -> Result<()> {
     output::output_many(&filtered, &args.filter.pluck, args.filter.count)
 }
 
+fn cmd_ready(args: cli::FilterArgs) -> Result<()> {
+    let st = store::Store::open()?;
+    let mut tickets = st.read_all()?;
+    deps::compute_reverse_fields(&mut tickets);
+
+    let closed_ids: std::collections::HashSet<String> = tickets
+        .iter()
+        .filter(|t| t.status == ticket::Status::Closed)
+        .map(|t| t.id.clone())
+        .collect();
+
+    // Keep only open/in_progress tickets where ALL deps are closed
+    let candidates: Vec<ticket::Ticket> = tickets
+        .into_iter()
+        .filter(|t| {
+            (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+                && t.deps.iter().all(|dep_id| closed_ids.contains(dep_id))
+        })
+        .collect();
+
+    // Apply tag/type/priority/assignee filters, but not status (already handled)
+    let mut filter = filter::Filter::from_args(&args)?;
+    filter.status = None;
+
+    let filtered = filter::apply_filters(candidates, &filter);
+    output::output_many(&filtered, &args.pluck, args.count)
+}
+
+fn cmd_blocked(args: cli::FilterArgs) -> Result<()> {
+    let st = store::Store::open()?;
+    let mut tickets = st.read_all()?;
+    deps::compute_reverse_fields(&mut tickets);
+
+    let closed_ids: std::collections::HashSet<String> = tickets
+        .iter()
+        .filter(|t| t.status == ticket::Status::Closed)
+        .map(|t| t.id.clone())
+        .collect();
+
+    // Keep only open/in_progress tickets where ANY dep is NOT closed
+    let candidates: Vec<ticket::Ticket> = tickets
+        .into_iter()
+        .filter(|t| {
+            (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+                && t.deps.iter().any(|dep_id| !closed_ids.contains(dep_id))
+        })
+        .collect();
+
+    let mut filter = filter::Filter::from_args(&args)?;
+    filter.status = None;
+
+    let filtered = filter::apply_filters(candidates, &filter);
+
+    if args.count {
+        println!("{}", filtered.len());
+        return Ok(());
+    }
+
+    // Serialize each ticket and inject open_deps before output
+    let values: Vec<serde_json::Value> = filtered
+        .iter()
+        .map(|t| -> Result<serde_json::Value> {
+            let mut v = serde_json::to_value(t)?;
+            let open_deps: Vec<&String> =
+                t.deps.iter().filter(|dep_id| !closed_ids.contains(*dep_id)).collect();
+            v["open_deps"] = serde_json::json!(open_deps);
+            Ok(v)
+        })
+        .collect::<Result<_>>()?;
+
+    if let Some(ref fields) = args.pluck {
+        output::output_plucked(&values, fields);
+    } else {
+        println!("{}", serde_json::Value::Array(values));
+    }
+
+    Ok(())
+}
+
+fn is_ready_state(id: &str, exact: bool) -> Result<(bool, Vec<String>)> {
+    let st = store::Store::open()?;
+    let resolved = st.resolve_id(id, exact)?;
+    let tickets = st.read_all()?;
+
+    let ticket = tickets
+        .iter()
+        .find(|t| t.id == resolved)
+        .ok_or_else(|| Error::NotFound(resolved.clone()))?;
+
+    if ticket.status == ticket::Status::Closed {
+        return Ok((true, vec![]));
+    }
+
+    let open_deps: Vec<String> = ticket
+        .deps
+        .iter()
+        .filter(|dep_id| {
+            tickets
+                .iter()
+                .find(|t| &t.id == *dep_id)
+                .map(|t| t.status != ticket::Status::Closed)
+                .unwrap_or(true) // missing dep counts as open
+        })
+        .cloned()
+        .collect();
+
+    Ok((open_deps.is_empty(), open_deps))
+}
+
+fn cmd_is_ready(args: cli::IdArgs, exact: bool) -> Result<()> {
+    let (ready, open_deps) = is_ready_state(&args.id, exact)?;
+    let output = serde_json::json!({
+        "ready": ready,
+        "open_deps": open_deps,
+    });
+    println!("{}", output);
+    if !ready {
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
 fn dispatch(cli: Cli) -> Result<()> {
     let exact = cli.exact;
     match cli.command {
         Commands::Create(args) => cmd_create(args, exact),
         Commands::Show(args) => cmd_show(args, exact),
         Commands::List(args) => cmd_list(args),
-        Commands::Ready(_) => Err(Error::InvalidField("not implemented: ready".into())),
-        Commands::Blocked(_) => Err(Error::InvalidField("not implemented: blocked".into())),
+        Commands::Ready(args) => cmd_ready(args),
+        Commands::Blocked(args) => cmd_blocked(args),
         Commands::Closed(args) => cmd_closed(args),
         Commands::Update(args) => cmd_update(args, exact),
         Commands::Start(args) => cmd_start(args, exact),
         Commands::Close(args) => cmd_close(args, exact),
         Commands::Reopen(args) => cmd_reopen(args, exact),
-        Commands::IsReady(_) => Err(Error::InvalidField("not implemented: is-ready".into())),
+        Commands::IsReady(args) => cmd_is_ready(args, exact),
         Commands::AddNote(args) => cmd_add_note(args, exact),
         Commands::Dep(dep_args) => match dep_args.command {
             cli::DepCommands::Add(add_args) => cmd_dep_add(add_args, exact),
@@ -2306,6 +2428,379 @@ mod tests {
             filtered.truncate(limit);
         }
         assert_eq!(filtered.len(), 20);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── ready command tests ──────────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn ready_returns_ticket_with_no_deps() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("A"));
+        a.id = Some("ready-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut b = create_args(Some("B"));
+        b.id = Some("ready-b".to_string());
+        b.dep = vec!["ready-a".to_string()];
+        cmd_create(b, true).unwrap();
+
+        // Only A should be ready (B depends on A which is open)
+        let result = cmd_ready(filter_args_default());
+        assert!(result.is_ok(), "cmd_ready failed: {:?}", result);
+
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let closed_ids: std::collections::HashSet<String> = tickets
+            .iter()
+            .filter(|t| t.status == ticket::Status::Closed)
+            .map(|t| t.id.clone())
+            .collect();
+        let ready_ids: Vec<String> = tickets
+            .iter()
+            .filter(|t| {
+                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+                    && t.deps.iter().all(|d| closed_ids.contains(d))
+            })
+            .map(|t| t.id.clone())
+            .collect();
+        assert!(ready_ids.contains(&"ready-a".to_string()), "A should be ready");
+        assert!(!ready_ids.contains(&"ready-b".to_string()), "B should not be ready");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn ready_after_closing_dep_includes_both() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("A"));
+        a.id = Some("rca-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut b = create_args(Some("B"));
+        b.id = Some("rca-b".to_string());
+        b.dep = vec!["rca-a".to_string()];
+        cmd_create(b, true).unwrap();
+
+        // Close A
+        cmd_close(
+            cli::CloseArgs { ids: vec!["rca-a".to_string()], reason: None },
+            true,
+        ).unwrap();
+
+        let result = cmd_ready(filter_args_default());
+        assert!(result.is_ok(), "cmd_ready after close failed: {:?}", result);
+
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let closed_ids: std::collections::HashSet<String> = tickets
+            .iter()
+            .filter(|t| t.status == ticket::Status::Closed)
+            .map(|t| t.id.clone())
+            .collect();
+        // Only open/in_progress are "ready"
+        let ready_ids: Vec<String> = tickets
+            .iter()
+            .filter(|t| {
+                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+                    && t.deps.iter().all(|d| closed_ids.contains(d))
+            })
+            .map(|t| t.id.clone())
+            .collect();
+        // A is closed so not in ready list; B is now ready
+        assert!(!ready_ids.contains(&"rca-a".to_string()), "A is closed, not in ready list");
+        assert!(ready_ids.contains(&"rca-b".to_string()), "B should be ready after A is closed");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn ready_with_count_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Count A"));
+        a.id = Some("rc-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut args = filter_args_default();
+        args.count = true;
+        let result = cmd_ready(args);
+        assert!(result.is_ok(), "cmd_ready --count failed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn ready_with_tag_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Tagged"));
+        a.id = Some("rt-a".to_string());
+        a.tags = Some("backend".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut b = create_args(Some("Untagged"));
+        b.id = Some("rt-b".to_string());
+        cmd_create(b, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let closed_ids: std::collections::HashSet<String> = tickets
+            .iter()
+            .filter(|t| t.status == ticket::Status::Closed)
+            .map(|t| t.id.clone())
+            .collect();
+        let candidates: Vec<_> = tickets
+            .into_iter()
+            .filter(|t| {
+                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+                    && t.deps.iter().all(|d| closed_ids.contains(d))
+            })
+            .collect();
+        let filter = filter::Filter {
+            status: None,
+            tags: vec!["backend".to_string()],
+            ticket_type: None,
+            priority_range: None,
+            assignee: None,
+            limit: None,
+        };
+        let filtered = filter::apply_filters(candidates, &filter);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "rt-a");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── blocked command tests ────────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn blocked_returns_ticket_with_open_dep() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Dep A"));
+        a.id = Some("blk-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut b = create_args(Some("Blocked B"));
+        b.id = Some("blk-b".to_string());
+        b.dep = vec!["blk-a".to_string()];
+        cmd_create(b, true).unwrap();
+
+        let result = cmd_blocked(filter_args_default());
+        assert!(result.is_ok(), "cmd_blocked failed: {:?}", result);
+
+        // Verify state: B should be in blocked list, A should not
+        let st = store::Store::open().unwrap();
+        let tickets = st.read_all().unwrap();
+        let closed_ids: std::collections::HashSet<String> = tickets
+            .iter()
+            .filter(|t| t.status == ticket::Status::Closed)
+            .map(|t| t.id.clone())
+            .collect();
+        let blocked: Vec<_> = tickets
+            .iter()
+            .filter(|t| {
+                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+                    && t.deps.iter().any(|d| !closed_ids.contains(d))
+            })
+            .collect();
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].id, "blk-b");
+
+        // Verify open_deps for B
+        let b_ticket = blocked[0];
+        let open_deps: Vec<&String> =
+            b_ticket.deps.iter().filter(|d| !closed_ids.contains(*d)).collect();
+        assert_eq!(open_deps, vec![&"blk-a".to_string()]);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn blocked_with_priority_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Dep"));
+        a.id = Some("bpf-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut b = create_args(Some("High priority blocked"));
+        b.id = Some("bpf-b".to_string());
+        b.priority = Some(1);
+        b.dep = vec!["bpf-a".to_string()];
+        cmd_create(b, true).unwrap();
+
+        let mut c = create_args(Some("Low priority blocked"));
+        c.id = Some("bpf-c".to_string());
+        c.priority = Some(3);
+        c.dep = vec!["bpf-a".to_string()];
+        cmd_create(c, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let tickets = st.read_all().unwrap();
+        let closed_ids: std::collections::HashSet<String> = tickets
+            .iter()
+            .filter(|t| t.status == ticket::Status::Closed)
+            .map(|t| t.id.clone())
+            .collect();
+        let blocked_candidates: Vec<_> = tickets
+            .into_iter()
+            .filter(|t| {
+                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+                    && t.deps.iter().any(|d| !closed_ids.contains(d))
+            })
+            .collect();
+        // Apply priority filter 0-2
+        let filter = filter::Filter {
+            status: None,
+            tags: vec![],
+            ticket_type: None,
+            priority_range: Some((0, 2)),
+            assignee: None,
+            limit: None,
+        };
+        let filtered = filter::apply_filters(blocked_candidates, &filter);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "bpf-b");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── is-ready command tests ───────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn is_ready_state_ticket_with_no_deps_is_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("No deps"));
+        a.id = Some("ir-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let (ready, open_deps) = is_ready_state("ir-a", true).unwrap();
+        assert!(ready, "ticket with no deps should be ready");
+        assert!(open_deps.is_empty());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn is_ready_state_blocked_returns_open_deps() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Dep A"));
+        a.id = Some("irb-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut b = create_args(Some("Blocked B"));
+        b.id = Some("irb-b".to_string());
+        b.dep = vec!["irb-a".to_string()];
+        cmd_create(b, true).unwrap();
+
+        let (ready, open_deps) = is_ready_state("irb-b", true).unwrap();
+        assert!(!ready, "B should not be ready while A is open");
+        assert_eq!(open_deps, vec!["irb-a".to_string()]);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn is_ready_state_becomes_ready_after_dep_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Dep A"));
+        a.id = Some("irc-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let mut b = create_args(Some("Blocked B"));
+        b.id = Some("irc-b".to_string());
+        b.dep = vec!["irc-a".to_string()];
+        cmd_create(b, true).unwrap();
+
+        // Close A
+        cmd_close(
+            cli::CloseArgs { ids: vec!["irc-a".to_string()], reason: None },
+            true,
+        ).unwrap();
+
+        let (ready, open_deps) = is_ready_state("irc-b", true).unwrap();
+        assert!(ready, "B should be ready after A is closed");
+        assert!(open_deps.is_empty());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn is_ready_state_closed_ticket_is_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Closed ticket"));
+        a.id = Some("ird-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        cmd_close(
+            cli::CloseArgs { ids: vec!["ird-a".to_string()], reason: None },
+            true,
+        ).unwrap();
+
+        let (ready, open_deps) = is_ready_state("ird-a", true).unwrap();
+        assert!(ready, "closed ticket should be ready");
+        assert!(open_deps.is_empty());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn cmd_is_ready_returns_ok_when_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Ready ticket"));
+        a.id = Some("ire-a".to_string());
+        cmd_create(a, true).unwrap();
+
+        let result = cmd_is_ready(cli::IdArgs { id: "ire-a".to_string() }, true);
+        assert!(result.is_ok(), "cmd_is_ready should return Ok for ready ticket");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn is_ready_state_not_found_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let result = is_ready_state("nonexistent", true);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), "not_found");
 
         std::env::remove_var("VIMA_DIR");
     }
