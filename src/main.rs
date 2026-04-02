@@ -1,4 +1,5 @@
 mod cli;
+mod deps;
 mod error;
 mod filter;
 mod id;

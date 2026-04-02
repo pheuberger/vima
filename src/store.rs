@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use gray_matter::engine::YAML;
 use gray_matter::Matter;
 
+use crate::deps::compute_reverse_fields;
 use crate::error::{Error, Result};
 use crate::id;
 use crate::ticket::{Note, Ticket};
@@ -257,6 +258,15 @@ impl Store {
 
     pub fn resolve_id(&self, input: &str, exact: bool) -> Result<String> {
         id::resolve_id(&self.tickets, input, exact)
+    }
+
+    pub fn load_and_compute(&self, id: &str) -> Result<Ticket> {
+        let mut tickets = self.read_all()?;
+        compute_reverse_fields(&mut tickets);
+        tickets
+            .into_iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| Error::NotFound(id.to_string()))
     }
 
     pub fn tickets_dir(&self) -> &Path {
@@ -642,5 +652,58 @@ This is the **markdown** body.
         store.write_ticket(&ticket).unwrap();
         let read_back = store.read_ticket(&ticket.id).unwrap();
         assert_eq!(read_back.tags, ticket.tags);
+    }
+
+    #[test]
+    #[serial(env)]
+    fn load_and_compute_returns_ticket_with_reverse_fields() {
+        let (_tmp, store, tickets_dir) = make_store();
+
+        let blocker = r#"---
+id: blocker
+title: Blocker ticket
+status: open
+type: task
+priority: 2
+created: "2026-04-02T00:00:00Z"
+deps: []
+---
+"#;
+        let dependent = r#"---
+id: dependent
+title: Dependent ticket
+status: open
+type: task
+priority: 2
+created: "2026-04-02T00:00:00Z"
+deps: [blocker]
+---
+"#;
+        let child = r#"---
+id: child
+title: Child ticket
+status: open
+type: task
+priority: 2
+created: "2026-04-02T00:00:00Z"
+parent: blocker
+---
+"#;
+
+        fs::write(tickets_dir.join("blocker.md"), blocker).unwrap();
+        fs::write(tickets_dir.join("dependent.md"), dependent).unwrap();
+        fs::write(tickets_dir.join("child.md"), child).unwrap();
+
+        let ticket = store.load_and_compute("blocker").unwrap();
+        assert_eq!(ticket.blocks, vec!["dependent"]);
+        assert_eq!(ticket.children, vec!["child"]);
+    }
+
+    #[test]
+    #[serial(env)]
+    fn load_and_compute_not_found() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let err = store.load_and_compute("nonexistent").unwrap_err();
+        assert!(matches!(err, Error::NotFound(_)));
     }
 }
