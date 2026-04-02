@@ -1,3 +1,4 @@
+mod batch;
 mod cli;
 mod deps;
 mod error;
@@ -72,6 +73,13 @@ fn parse_tags(input: &str) -> Vec<String> {
 }
 
 fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
+    if args.batch {
+        let st = store::Store::open()?;
+        let tickets = batch::batch_create(&st, exact)?;
+        output::output_many(&tickets, &None, false)?;
+        return Ok(());
+    }
+
     let title = args
         .title
         .ok_or_else(|| Error::InvalidField("title is required".into()))?;

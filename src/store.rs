@@ -269,6 +269,16 @@ impl Store {
             .ok_or_else(|| Error::NotFound(id.to_string()))
     }
 
+    /// Add `dep_id` to the deps list of `ticket_id` (no-op if already present).
+    pub fn add_dep(&self, ticket_id: &str, dep_id: &str) -> Result<()> {
+        let mut ticket = self.read_ticket(ticket_id)?;
+        if !ticket.deps.contains(&dep_id.to_string()) {
+            ticket.deps.push(dep_id.to_string());
+            self.write_ticket(&ticket)?;
+        }
+        Ok(())
+    }
+
     pub fn tickets_dir(&self) -> &Path {
         &self.tickets
     }
