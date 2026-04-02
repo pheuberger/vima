@@ -55,14 +55,16 @@ pub fn resolve_id(dir: &Path, input: &str, exact: bool) -> Result<String> {
         if let Some(id) = name.strip_suffix(".md") {
             if id.contains(input) {
                 matches.push(id.to_string());
+                if matches.len() > 1 {
+                    return Err(Error::AmbiguousId(input.to_string(), matches));
+                }
             }
         }
     }
 
     match matches.len() {
         0 => Err(Error::NotFound(input.to_string())),
-        1 => Ok(matches.into_iter().next().unwrap()),
-        _ => Err(Error::AmbiguousId(input.to_string(), matches)),
+        _ => Ok(matches.into_iter().next().unwrap()),
     }
 }
 
@@ -76,8 +78,7 @@ pub fn get_prefix(vima_root: &Path) -> Result<String> {
                 if let Some(rest) = line.strip_prefix("prefix:") {
                     let prefix = rest
                         .trim()
-                        .trim_matches('"')
-                        .trim_matches('\'')
+                        .trim_matches(|c| c == '"' || c == '\'')
                         .to_string();
                     if !prefix.is_empty() {
                         return Ok(prefix);
