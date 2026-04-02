@@ -7,7 +7,7 @@ use gray_matter::Matter;
 use crate::error::{Error, Result};
 use crate::ticket::{Note, Ticket};
 
-pub fn needs_quoting(s: &str) -> bool {
+pub(crate) fn needs_quoting(s: &str) -> bool {
     if s.is_empty() {
         return true;
     }
@@ -24,9 +24,11 @@ pub fn needs_quoting(s: &str) -> bool {
     if s.contains(':') || s.contains('#') || s.contains('\n') || s.contains('"') || s.contains('\'') {
         return true;
     }
-    let lower = s.to_lowercase();
-    if matches!(lower.as_str(), "true" | "false" | "null" | "yes" | "no" | "on" | "off") {
-        return true;
+    if s.len() <= 5 {
+        let lower = s.to_lowercase();
+        if matches!(lower.as_str(), "true" | "false" | "null" | "yes" | "no" | "on" | "off") {
+            return true;
+        }
     }
     if s.parse::<f64>().is_ok() {
         return true;
@@ -34,7 +36,7 @@ pub fn needs_quoting(s: &str) -> bool {
     false
 }
 
-pub fn yaml_scalar(s: &str) -> String {
+pub(crate) fn yaml_scalar(s: &str) -> String {
     if needs_quoting(s) {
         let escaped = s
             .replace('\\', "\\\\")
@@ -48,7 +50,7 @@ pub fn yaml_scalar(s: &str) -> String {
     }
 }
 
-pub fn write_yaml_array(out: &mut String, key: &str, items: &[String]) {
+pub(crate) fn write_yaml_array(out: &mut String, key: &str, items: &[String]) {
     if items.is_empty() {
         out.push_str(&format!("{}: []\n", key));
         return;
@@ -57,7 +59,7 @@ pub fn write_yaml_array(out: &mut String, key: &str, items: &[String]) {
     out.push_str(&format!("{}: [{}]\n", key, items_str.join(", ")));
 }
 
-pub fn write_yaml_notes(out: &mut String, notes: &[Note]) {
+pub(crate) fn write_yaml_notes(out: &mut String, notes: &[Note]) {
     if notes.is_empty() {
         out.push_str("notes: []\n");
         return;
@@ -280,7 +282,6 @@ mod tests {
         fs::create_dir(&vima).unwrap();
 
         std::env::set_current_dir(tmp.path()).unwrap();
-        // Remove VIMA_DIR if set
         std::env::remove_var("VIMA_DIR");
 
         let found = find_vima_root().unwrap();
