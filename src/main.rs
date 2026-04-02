@@ -13,57 +13,6 @@ use clap::{CommandFactory, Parser};
 use cli::{Cli, Commands};
 use error::{Error, Result};
 
-const CLAUDE_MD_CONTENT: &str = r#"# vima — ticket tracker
-
-`vima` is this project's ticket tracker. Tickets live in `.vima/tickets/`.
-
-## Common commands
-
-```
-vima create "Title" [-t task|bug|feature] [-p 0-4] [--dep ID] [--tags foo,bar]
-vima list [--tag foo] [--type bug] [--priority 0-2]
-vima ready                    # tickets with no open deps
-vima show ID
-vima update ID --title "..." --description "..."
-vima close ID [--reason "..."]
-vima start ID                 # set status → in_progress
-```
-
-## Output format
-
-All output is newline-delimited JSON (one object per line). Use `--pluck FIELD`
-to extract a single field and `--count` to get a count.
-
-```
-vima list --pluck id          # print IDs only
-vima list --count             # print number of open tickets
-```
-
-## Batch create with back-references
-
-```
-vima create --batch <<'EOF'
-[
-  {"title": "Task A", "id": "a"},
-  {"title": "Task B", "dep": ["a"]}
-]
-EOF
-```
-
-## Dependencies
-
-```
-vima dep add ID DEP_ID        # ID depends on DEP_ID
-vima dep add ID DEP_ID --blocks  # ID blocks DEP_ID
-vima is-ready ID              # exits 0 if ready, 1 if blocked
-```
-
-## Automation tips
-
-- Set `VIMA_EXACT=1` (or `--exact`) to disable partial ID matching.
-- All commands exit 0 on success, non-zero on error.
-"#;
-
 pub(crate) fn parse_tags(input: &str) -> Vec<String> {
     input
         .split(',')
@@ -465,7 +414,7 @@ fn cmd_dep_cycle() -> Result<()> {
     Ok(())
 }
 
-fn cmd_init(args: cli::InitArgs) -> Result<()> {
+fn cmd_init(_args: cli::InitArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let vima_dir = cwd.join(".vima");
     let tickets_dir = vima_dir.join("tickets");
@@ -478,22 +427,17 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         std::fs::write(&config_path, format!("prefix: {}\n", prefix))?;
     }
 
-    if args.with_instructions {
-        let claude_md = cwd.join("CLAUDE.md");
-        if claude_md.exists() {
-            return Err(Error::InvalidField(
-                "CLAUDE.md already exists — merge manually".into(),
-            ));
-        }
-        std::fs::write(&claude_md, CLAUDE_MD_CONTENT)?;
-        eprintln!("Created CLAUDE.md with vima usage instructions");
-    }
-
     eprintln!("Initialized vima in .vima/");
     Ok(())
 }
 
-fn cmd_help() -> Result<()> {
+fn cmd_help(args: cli::HelpArgs) -> Result<()> {
+    if args.json {
+        let json = help_json();
+        println!("{}", serde_json::to_string_pretty(&json)?);
+        return Ok(());
+    }
+
     let mut cmd = Cli::command();
     cmd.print_help().map_err(|e| Error::InvalidField(e.to_string()))?;
     println!();
@@ -509,6 +453,121 @@ fn cmd_help() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn help_json() -> serde_json::Value {
+    let cmd = Cli::command();
+    let mut commands = Vec::new();
+
+    for sub in cmd.get_subcommands() {
+        let name = sub.get_name().to_string();
+        let about = sub.get_about().map(|a| a.to_string());
+
+        let mut args = Vec::new();
+        for arg in sub.get_arguments() {
+            if arg.get_id() == "help" || arg.get_id() == "version" {
+                continue;
+            }
+            let mut entry = serde_json::json!({
+                "name": arg.get_id().as_str(),
+            });
+            if let Some(short) = arg.get_short() {
+                entry["short"] = serde_json::json!(format!("-{}", short));
+            }
+            if let Some(long) = arg.get_long() {
+                entry["long"] = serde_json::json!(format!("--{}", long));
+            }
+            if let Some(help) = arg.get_help() {
+                entry["help"] = serde_json::json!(help.to_string());
+            }
+            entry["required"] = serde_json::json!(arg.is_required_set());
+            if let Some(vals) = arg.get_value_names() {
+                let names: Vec<&str> = vals.iter().map(|v| v.as_str()).collect();
+                if !names.is_empty() {
+                    entry["value_name"] = serde_json::json!(names.join(", "));
+                }
+            }
+            args.push(entry);
+        }
+
+        let mut subcommands = Vec::new();
+        for subsub in sub.get_subcommands() {
+            let mut sc = serde_json::json!({
+                "name": subsub.get_name(),
+            });
+            if let Some(about) = subsub.get_about() {
+                sc["about"] = serde_json::json!(about.to_string());
+            }
+            let mut sc_args = Vec::new();
+            for arg in subsub.get_arguments() {
+                if arg.get_id() == "help" || arg.get_id() == "version" {
+                    continue;
+                }
+                let mut entry = serde_json::json!({"name": arg.get_id().as_str()});
+                if let Some(short) = arg.get_short() {
+                    entry["short"] = serde_json::json!(format!("-{}", short));
+                }
+                if let Some(long) = arg.get_long() {
+                    entry["long"] = serde_json::json!(format!("--{}", long));
+                }
+                if let Some(help) = arg.get_help() {
+                    entry["help"] = serde_json::json!(help.to_string());
+                }
+                entry["required"] = serde_json::json!(arg.is_required_set());
+                sc_args.push(entry);
+            }
+            if !sc_args.is_empty() {
+                sc["args"] = serde_json::json!(sc_args);
+            }
+            subcommands.push(sc);
+        }
+
+        let mut cmd_json = serde_json::json!({ "name": name });
+        if let Some(about) = about {
+            cmd_json["about"] = serde_json::json!(about);
+        }
+        if !args.is_empty() {
+            cmd_json["args"] = serde_json::json!(args);
+        }
+        if !subcommands.is_empty() {
+            cmd_json["subcommands"] = serde_json::json!(subcommands);
+        }
+        commands.push(cmd_json);
+    }
+
+    let plugins = plugin::discover_plugins();
+    let plugin_json: Vec<serde_json::Value> = plugins
+        .iter()
+        .map(|(name, desc)| {
+            let mut p = serde_json::json!({"name": name});
+            if let Some(d) = desc {
+                p["about"] = serde_json::json!(d);
+            }
+            p
+        })
+        .collect();
+
+    let mut root = serde_json::json!({
+        "name": "vima",
+        "about": "AI-agent-first ticketing CLI",
+        "global_flags": [
+            {"long": "--pretty", "help": "Output in human-readable pretty format"},
+            {"long": "--exact", "help": "Use exact ID matching (no partial match). Also: VIMA_EXACT=1"}
+        ],
+        "output_format": "All commands emit JSON to stdout. Errors are JSON on stderr.",
+        "exit_codes": {
+            "0": "success",
+            "1": "error (not_found, ambiguous_id, io_error, etc.)",
+            "2": "cycle detected or ticket blocked (is-ready, dep cycle)"
+        },
+        "commands": commands,
+    });
+
+    if !plugin_json.is_empty() {
+        root["plugins"] = serde_json::json!(plugin_json);
+    }
+
+    root
 }
 
 fn cmd_list(args: cli::FilterArgs, pretty: bool) -> Result<()> {
@@ -731,7 +790,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Link(args) => cmd_link(args, exact),
         Commands::Unlink(args) => cmd_unlink(args, exact),
         Commands::Init(args) => cmd_init(args),
-        Commands::Help(_) => cmd_help(),
+        Commands::Help(args) => cmd_help(args),
         Commands::External(args) => {
             let cmd = &args[0];
             if plugin::try_plugin(cmd, &args[1..]).is_none() {
@@ -769,8 +828,8 @@ mod tests {
         output::output_one_to_writer(&ticket, &args.pluck, w)
     }
 
-    fn init_args(with_instructions: bool) -> cli::InitArgs {
-        cli::InitArgs { with_instructions }
+    fn init_args() -> cli::InitArgs {
+        cli::InitArgs {}
     }
 
     #[test]
@@ -780,7 +839,7 @@ mod tests {
         std::env::set_current_dir(tmp.path()).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init(init_args(false)).unwrap();
+        cmd_init(init_args()).unwrap();
 
         assert!(tmp.path().join(".vima").is_dir());
         assert!(tmp.path().join(".vima/tickets").is_dir());
@@ -796,7 +855,7 @@ mod tests {
         std::env::set_current_dir(&project_dir).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init(init_args(false)).unwrap();
+        cmd_init(init_args()).unwrap();
 
         let config = std::fs::read_to_string(project_dir.join(".vima/config.yml")).unwrap();
         assert!(config.contains("prefix: mp"), "config was: {config}");
@@ -809,13 +868,13 @@ mod tests {
         std::env::set_current_dir(tmp.path()).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init(init_args(false)).unwrap();
+        cmd_init(init_args()).unwrap();
 
         // Overwrite config with custom prefix
         std::fs::write(tmp.path().join(".vima/config.yml"), "prefix: custom\n").unwrap();
 
         // Run init again — must not overwrite config
-        cmd_init(init_args(false)).unwrap();
+        cmd_init(init_args()).unwrap();
 
         let config = std::fs::read_to_string(tmp.path().join(".vima/config.yml")).unwrap();
         assert!(config.contains("prefix: custom"), "config was: {config}");
@@ -828,63 +887,10 @@ mod tests {
         std::env::set_current_dir(tmp.path()).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init(init_args(false)).unwrap();
-        cmd_init(init_args(false)).unwrap();
+        cmd_init(init_args()).unwrap();
+        cmd_init(init_args()).unwrap();
     }
 
-    #[test]
-    #[serial(env)]
-    fn init_without_flag_does_not_create_claude_md() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
-        std::env::remove_var("VIMA_DIR");
-
-        cmd_init(init_args(false)).unwrap();
-
-        assert!(!tmp.path().join("CLAUDE.md").exists());
-    }
-
-    #[test]
-    #[serial(env)]
-    fn init_with_instructions_creates_claude_md() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
-        std::env::remove_var("VIMA_DIR");
-
-        cmd_init(init_args(true)).unwrap();
-
-        let claude_md = tmp.path().join("CLAUDE.md");
-        assert!(claude_md.exists());
-        let content = std::fs::read_to_string(&claude_md).unwrap();
-        assert!(content.contains("create"), "missing 'create': {content}");
-        assert!(content.contains("list"), "missing 'list': {content}");
-        assert!(content.contains("ready"), "missing 'ready': {content}");
-        assert!(content.contains("close"), "missing 'close': {content}");
-        assert!(content.contains("vima"), "missing 'vima': {content}");
-    }
-
-    #[test]
-    #[serial(env)]
-    fn init_with_instructions_errors_if_claude_md_exists() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
-        std::env::remove_var("VIMA_DIR");
-
-        let claude_md = tmp.path().join("CLAUDE.md");
-        std::fs::write(&claude_md, "existing content").unwrap();
-
-        let result = cmd_init(init_args(true));
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("CLAUDE.md already exists"),
-            "unexpected error: {err_msg}"
-        );
-
-        // File must be unchanged
-        let content = std::fs::read_to_string(&claude_md).unwrap();
-        assert_eq!(content, "existing content");
-    }
 
     // ── create command tests ─────────────────────────────────────────────────
 

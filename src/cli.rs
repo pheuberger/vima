@@ -259,16 +259,16 @@ pub struct CloseArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct InitArgs {
-    /// Create CLAUDE.md in current directory with vima usage instructions for AI agents
-    #[arg(long)]
-    pub with_instructions: bool,
-}
+pub struct InitArgs {}
 
 #[derive(Args, Debug)]
 pub struct HelpArgs {
     /// Subcommand to show help for
     pub command: Option<String>,
+
+    /// Output help as JSON (for agent consumption)
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]
