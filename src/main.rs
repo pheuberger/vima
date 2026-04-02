@@ -151,6 +151,14 @@ fn cmd_create(args: cli::CreateArgs, exact: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_show(args: cli::ShowArgs, exact: bool) -> Result<()> {
+    let st = store::Store::open()?;
+    let resolved = st.resolve_id(&args.id, exact)?;
+    let ticket = st.load_and_compute(&resolved)?;
+    output::output_one(&ticket, &args.pluck)?;
+    Ok(())
+}
+
 fn cmd_init(args: cli::InitArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let vima_dir = cwd.join(".vima");
@@ -183,7 +191,7 @@ fn dispatch(cli: Cli) -> Result<()> {
     let exact = cli.exact;
     match cli.command {
         Commands::Create(args) => cmd_create(args, exact),
-        Commands::Show(_) => Err(Error::InvalidField("not implemented: show".into())),
+        Commands::Show(args) => cmd_show(args, exact),
         Commands::List(_) => Err(Error::InvalidField("not implemented: list".into())),
         Commands::Ready(_) => Err(Error::InvalidField("not implemented: ready".into())),
         Commands::Blocked(_) => Err(Error::InvalidField("not implemented: blocked".into())),
@@ -499,6 +507,158 @@ mod tests {
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("dep-02").unwrap();
         assert_eq!(ticket.deps, vec!["dep-01"]);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    fn show_args(id: &str) -> cli::ShowArgs {
+        cli::ShowArgs {
+            id: id.to_string(),
+            pluck: None,
+        }
+    }
+
+    // ── show command tests ───────────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn show_returns_ticket_by_exact_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Show me"));
+        args.id = Some("show-01".to_string());
+        cmd_create(args, false).unwrap();
+
+        let result = cmd_show(show_args("show-01"), true);
+        assert!(result.is_ok(), "show failed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn show_resolves_partial_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Partial match"));
+        args.id = Some("partial-01".to_string());
+        cmd_create(args, false).unwrap();
+
+        // Use prefix "partial" which should resolve to "partial-01"
+        let result = cmd_show(show_args("partial"), false);
+        assert!(result.is_ok(), "show with partial id failed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn show_with_exact_flag_rejects_partial_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Exact check"));
+        args.id = Some("exact-01".to_string());
+        cmd_create(args, false).unwrap();
+
+        let result = cmd_show(show_args("exact"), true);
+        assert!(result.is_err(), "expected error for partial id with --exact");
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "not_found");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn show_pluck_single_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Pluck me"));
+        args.id = Some("pluck-01".to_string());
+        cmd_create(args, false).unwrap();
+
+        let mut sa = show_args("pluck-01");
+        sa.pluck = Some("title".to_string());
+        let result = cmd_show(sa, true);
+        assert!(result.is_ok(), "show --pluck title failed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn show_pluck_multiple_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Multi pluck"));
+        args.id = Some("mpluck-01".to_string());
+        cmd_create(args, false).unwrap();
+
+        let mut sa = show_args("mpluck-01");
+        sa.pluck = Some("title,priority".to_string());
+        let result = cmd_show(sa, true);
+        assert!(result.is_ok(), "show --pluck title,priority failed: {:?}", result);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn show_includes_computed_blocks_and_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        // Create parent and child tickets
+        let mut parent_args = create_args(Some("Parent"));
+        parent_args.id = Some("parent-01".to_string());
+        cmd_create(parent_args, false).unwrap();
+
+        // Create blocker and blocked ticket
+        let mut blocker_args = create_args(Some("Blocker"));
+        blocker_args.id = Some("blocker-01".to_string());
+        cmd_create(blocker_args, false).unwrap();
+
+        let mut blocked_args = create_args(Some("Blocked"));
+        blocked_args.id = Some("blocked-01".to_string());
+        blocked_args.dep = vec!["blocker-01".to_string()];
+        blocked_args.parent = Some("parent-01".to_string());
+        cmd_create(blocked_args, true).unwrap();
+
+        // Show the blocker — its `blocks` should contain "blocked-01"
+        let st = store::Store::open().unwrap();
+        let ticket = st.load_and_compute("blocker-01").unwrap();
+        assert!(
+            ticket.blocks.contains(&"blocked-01".to_string()),
+            "blocks field should contain blocked-01, got: {:?}",
+            ticket.blocks
+        );
+
+        // Show the parent — its `children` should contain "blocked-01"
+        let parent = st.load_and_compute("parent-01").unwrap();
+        assert!(
+            parent.children.contains(&"blocked-01".to_string()),
+            "children field should contain blocked-01, got: {:?}",
+            parent.children
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn show_nonexistent_returns_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let result = cmd_show(show_args("nonexistent"), false);
+        assert!(result.is_err(), "expected error for nonexistent id");
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "not_found");
 
         std::env::remove_var("VIMA_DIR");
     }
