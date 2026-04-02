@@ -1,4 +1,5 @@
 mod cli;
+mod ticket;
 
 use clap::Parser;
 use cli::{Cli, Commands};

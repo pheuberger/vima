@@ -1,25 +1,6 @@
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand};
 
-// TODO: import Status and TicketType from ticket.rs once that bead is implemented.
-// For now, define placeholder enums here.
-
-#[derive(Debug, Clone, PartialEq, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub enum Status {
-    Open,
-    InProgress,
-    Closed,
-}
-
-#[derive(Debug, Clone, PartialEq, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub enum TicketType {
-    Bug,
-    Feature,
-    Task,
-    Epic,
-    Chore,
-}
+use crate::ticket::{Status, TicketType};
 
 #[derive(Parser, Debug)]
 #[command(name = "vima", about = "AI-agent-first ticketing CLI", disable_help_subcommand = true)]
