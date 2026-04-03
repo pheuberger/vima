@@ -216,8 +216,10 @@ vima list --pretty
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
-| `1` | General error (not found, ambiguous ID, IO, parse, etc.) |
+| `1` | General error (invalid field, IO, parse, etc.) |
 | `2` | Cycle detected (`dep cycle`) or ticket blocked (`is-ready`) |
+| `3` | Not found or ambiguous ID |
+| `4` | Conflict (ID already exists) |
 
 ## Batch create
 
@@ -328,7 +330,7 @@ This project uses `vima` for ticket tracking. Run `vima help --json` for the ful
 |----------|-------------------|
 | **JSON everywhere** | All output is structured NDJSON — parseable without regex, composable with `jq` |
 | **`help --json`** | Runtime-discoverable schema — agents self-serve instead of reading docs |
-| **Deterministic exit codes** | Branch on 0/1/2 without parsing output text |
+| **Deterministic exit codes** | Branch on exit code without parsing output text |
 | **`--exact` mode** | `VIMA_EXACT=1` prevents fuzzy matching surprises in automation |
 | **`--pluck` and `--count`** | Extract exactly the data needed — minimizes token consumption |
 | **`--full` opt-in** | Heavy fields (description, notes, body) excluded by default, saving tokens |
