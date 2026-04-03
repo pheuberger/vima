@@ -3,11 +3,59 @@ use std::path::{Path, PathBuf};
 
 use gray_matter::engine::YAML;
 use gray_matter::Matter;
+use sha2::{Digest, Sha256};
 
 use crate::deps::compute_reverse_fields;
 use crate::error::{Error, Result};
 use crate::id;
 use crate::ticket::{Note, Ticket};
+
+/// Compute a 16-char hex version hash from ticket content (excluding the version field itself).
+fn compute_version(content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    let result = hasher.finalize();
+    result[..8].iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Extract the version field from raw YAML frontmatter without full deserialization.
+fn extract_version_from_yaml(content: &str) -> Option<String> {
+    let mut in_frontmatter = false;
+    for line in content.lines() {
+        if line == "---" {
+            if in_frontmatter {
+                break; // closing ---
+            }
+            in_frontmatter = true;
+            continue;
+        }
+        if in_frontmatter {
+            if let Some(v) = line.strip_prefix("version: ") {
+                return Some(v.trim().trim_matches('"').to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Insert `version: <hash>` line after the `id:` line in serialized ticket content.
+fn insert_version_line(content: &str, version: &str) -> String {
+    // Content starts with "---\nid: ...\n" — insert after the id line
+    let after_sep = match content.find('\n') {
+        Some(pos) => pos + 1,
+        None => return content.to_string(),
+    };
+    // Find end of id line
+    let id_end = match content[after_sep..].find('\n') {
+        Some(pos) => after_sep + pos + 1,
+        None => return content.to_string(),
+    };
+    let mut result = String::with_capacity(content.len() + 30);
+    result.push_str(&content[..id_end]);
+    result.push_str(&format!("version: \"{}\"\n", version));
+    result.push_str(&content[id_end..]);
+    result
+}
 
 pub(crate) fn needs_quoting(s: &str) -> bool {
     if s.is_empty() {
@@ -98,7 +146,7 @@ pub fn find_vima_root() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("VIMA_DIR") {
         let path = PathBuf::from(&dir);
         if path.is_dir() {
-            return path.canonicalize().map_err(Error::IoError);
+            return path.canonicalize().map_err(Error::Io);
         }
         return Err(Error::InvalidField(
             "VIMA_DIR points to non-existent directory".into(),
@@ -110,7 +158,7 @@ pub fn find_vima_root() -> Result<PathBuf> {
     loop {
         let candidate = current.join(".vima");
         if candidate.is_dir() {
-            return candidate.canonicalize().map_err(Error::IoError);
+            return candidate.canonicalize().map_err(Error::Io);
         }
         match current.parent() {
             Some(parent) => current = parent,
@@ -138,11 +186,11 @@ impl Store {
 
         let parsed = Matter::<YAML>::new()
             .parse::<Ticket>(&contents)
-            .map_err(|e| Error::YamlError(e.to_string()))?;
+            .map_err(|e| Error::Yaml(e.to_string()))?;
 
         let mut ticket = parsed
             .data
-            .ok_or_else(|| Error::YamlError(format!("missing frontmatter in {}.md", id)))?;
+            .ok_or_else(|| Error::Yaml(format!("missing frontmatter in {}.md", id)))?;
 
         let body = parsed.content.trim();
         if !body.is_empty() {
@@ -260,9 +308,28 @@ impl Store {
             }
         }
 
-        let tmp_path = self.tickets.join(format!("{}.md.tmp", ticket.id));
+        // Compute version hash from content (without version line)
+        let new_version = compute_version(&out);
+
+        // Conflict detection: if file exists, compare versions
         let final_path = self.tickets.join(format!("{}.md", ticket.id));
-        fs::write(&tmp_path, &out)?;
+        if final_path.exists() {
+            let on_disk_content = fs::read_to_string(&final_path)?;
+            let on_disk_version = extract_version_from_yaml(&on_disk_content);
+            // Only check if on-disk ticket has a version (skip for legacy tickets)
+            if on_disk_version.is_some() && on_disk_version != ticket.version {
+                return Err(Error::Stale {
+                    id: ticket.id.clone(),
+                    expected: ticket.version.clone(),
+                    actual: on_disk_version,
+                });
+            }
+        }
+
+        // Insert version into content and write atomically
+        let final_content = insert_version_line(&out, &new_version);
+        let tmp_path = self.tickets.join(format!("{}.md.tmp", ticket.id));
+        fs::write(&tmp_path, &final_content)?;
         fs::rename(&tmp_path, &final_path)?;
 
         Ok(())
@@ -563,6 +630,7 @@ This is the **markdown** body.
     fn make_full_ticket() -> Ticket {
         Ticket {
             id: "rt-abc1".to_string(),
+            version: None,
             title: "Round-trip: title with special chars".to_string(),
             status: Status::InProgress,
             ticket_type: TicketType::Bug,
@@ -738,6 +806,7 @@ parent: blocker
     fn make_minimal_ticket(id: &str) -> Ticket {
         Ticket {
             id: id.to_string(),
+            version: None,
             title: "Minimal ticket".to_string(),
             status: Status::Open,
             ticket_type: TicketType::Task,
@@ -930,7 +999,7 @@ parent: blocker
         let (_tmp, store, id) = store_with_ticket(content);
         let err = store.read_ticket(&id).unwrap_err();
         assert!(
-            matches!(err, Error::YamlError(_)),
+            matches!(err, Error::Yaml(_)),
             "expected YamlError, got: {:?}",
             err
         );
@@ -943,7 +1012,7 @@ parent: blocker
         let (_tmp, store, id) = store_with_ticket(content);
         let err = store.read_ticket(&id).unwrap_err();
         assert!(
-            matches!(err, Error::YamlError(_)),
+            matches!(err, Error::Yaml(_)),
             "expected YamlError, got: {:?}",
             err
         );
@@ -969,7 +1038,7 @@ parent: blocker
         let (_tmp, store, id) = store_with_ticket(content);
         let err = store.read_ticket(&id).unwrap_err();
         assert!(
-            matches!(err, Error::YamlError(_)),
+            matches!(err, Error::Yaml(_)),
             "expected YamlError for missing required fields, got: {:?}",
             err
         );
@@ -990,7 +1059,7 @@ created: "2026-04-02T00:00:00Z"
         let (_tmp, store, id) = store_with_ticket(content);
         let err = store.read_ticket(&id).unwrap_err();
         assert!(
-            matches!(err, Error::YamlError(_)),
+            matches!(err, Error::Yaml(_)),
             "expected YamlError for invalid enum, got: {:?}",
             err
         );
@@ -1002,7 +1071,7 @@ created: "2026-04-02T00:00:00Z"
         let (_tmp, store, _tickets_dir) = make_store();
         let err = store.read_ticket("does-not-exist").unwrap_err();
         assert!(
-            matches!(err, Error::IoError(_)),
+            matches!(err, Error::Io(_)),
             "expected IoError for missing file, got: {:?}",
             err
         );
@@ -1047,7 +1116,7 @@ created: "2026-04-02T00:00:00Z"
         );
         let err = result.unwrap_err();
         assert!(
-            matches!(err, Error::IoError(_)),
+            matches!(err, Error::Io(_)),
             "expected IoError for permission denied, got: {:?}",
             err
         );
@@ -1071,7 +1140,7 @@ created: "2026-04-02T00:00:00Z"
 
         let err = store.read_ticket(id).unwrap_err();
         assert!(
-            matches!(err, Error::IoError(_)),
+            matches!(err, Error::Io(_)),
             "expected IoError for invalid UTF-8, got: {:?}",
             err
         );
@@ -1139,5 +1208,266 @@ created: "2026-04-02T00:00:00Z"
         assert_eq!(ticket.deps.len(), 2);
         assert!(ticket.deps.contains(&"ad-g".to_string()));
         assert!(ticket.deps.contains(&"ad-h".to_string()));
+    }
+
+    // ── version / optimistic concurrency tests ────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_adds_version_field() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let ticket = make_minimal_ticket("ver-001");
+        store.write_ticket(&ticket).unwrap();
+        let read_back = store.read_ticket("ver-001").unwrap();
+        assert!(
+            read_back.version.is_some(),
+            "version should be set after write"
+        );
+        let v = read_back.version.unwrap();
+        assert_eq!(v.len(), 16, "version should be 16 hex chars, got: {v}");
+        assert!(
+            v.chars().all(|c| c.is_ascii_hexdigit()),
+            "version should be hex, got: {v}"
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_version_changes_on_content_change() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let mut ticket = make_minimal_ticket("ver-002");
+        store.write_ticket(&ticket).unwrap();
+        let v1 = store.read_ticket("ver-002").unwrap().version.unwrap();
+
+        ticket.title = "Changed title".to_string();
+        // Update version to match on-disk so the write succeeds
+        ticket.version = Some(v1.clone());
+        store.write_ticket(&ticket).unwrap();
+        let v2 = store.read_ticket("ver-002").unwrap().version.unwrap();
+
+        assert_ne!(v1, v2, "version should change when content changes");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_version_stable_for_same_content() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let ticket = make_minimal_ticket("ver-003");
+        store.write_ticket(&ticket).unwrap();
+        let v1 = store.read_ticket("ver-003").unwrap().version.unwrap();
+
+        // Write the exact same content again (with matching version)
+        let ticket2 = store.read_ticket("ver-003").unwrap();
+        store.write_ticket(&ticket2).unwrap();
+        let v2 = store.read_ticket("ver-003").unwrap().version.unwrap();
+
+        assert_eq!(v1, v2, "version should be stable for identical content");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_stale_version_returns_error() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let ticket = make_minimal_ticket("ver-004");
+        store.write_ticket(&ticket).unwrap();
+
+        // Simulate two agents: both read the same ticket
+        let mut agent_a = store.read_ticket("ver-004").unwrap();
+        let mut agent_b = store.read_ticket("ver-004").unwrap();
+
+        // Agent A writes first — succeeds (version now changes on disk)
+        agent_a.title = "Agent A change".to_string();
+        store.write_ticket(&agent_a).unwrap();
+
+        // Agent B tries to write with the old version — should fail
+        agent_b.title = "Agent B change".to_string();
+        let err = store.write_ticket(&agent_b).unwrap_err();
+        assert!(
+            matches!(err, Error::Stale { .. }),
+            "expected Stale error, got: {:?}",
+            err
+        );
+        assert_eq!(err.exit_code(), 5);
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_legacy_ticket_without_version_migrates() {
+        let (_tmp, store, tickets_dir) = make_store();
+        // Simulate a ticket written by old vima (no version field)
+        let content = r#"---
+id: ver-005
+title: Legacy ticket
+status: open
+type: task
+priority: 2
+tags: []
+assignee: null
+estimate: null
+deps: []
+links: []
+parent: null
+created: "2026-04-02T00:00:00Z"
+notes: []
+---
+"#;
+        fs::write(tickets_dir.join("ver-005.md"), content).unwrap();
+        let mut ticket = store.read_ticket("ver-005").unwrap();
+        assert!(
+            ticket.version.is_none(),
+            "legacy ticket should have no version"
+        );
+
+        // Update it — should succeed and add a version
+        ticket.title = "Updated legacy".to_string();
+        store.write_ticket(&ticket).unwrap();
+        let updated = store.read_ticket("ver-005").unwrap();
+        assert!(
+            updated.version.is_some(),
+            "version should be added on first write"
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_new_ticket_skips_version_check() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        // Brand new ticket (file doesn't exist) — should never return stale
+        let ticket = make_minimal_ticket("ver-006");
+        store.write_ticket(&ticket).unwrap();
+        let read_back = store.read_ticket("ver-006").unwrap();
+        assert!(read_back.version.is_some());
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_round_trip_preserves_version() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let ticket = make_minimal_ticket("ver-007");
+        store.write_ticket(&ticket).unwrap();
+        let read1 = store.read_ticket("ver-007").unwrap();
+
+        // Write it back unchanged — version should remain the same
+        store.write_ticket(&read1).unwrap();
+        let read2 = store.read_ticket("ver-007").unwrap();
+        assert_eq!(read1.version, read2.version);
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_version_in_file_content() {
+        let (_tmp, store, tickets_dir) = make_store();
+        let ticket = make_minimal_ticket("ver-008");
+        store.write_ticket(&ticket).unwrap();
+
+        let content = fs::read_to_string(tickets_dir.join("ver-008.md")).unwrap();
+        assert!(
+            content.contains("version: "),
+            "file should contain version field"
+        );
+    }
+
+    // ── direct unit tests for version helpers ────────────────────────────
+
+    #[test]
+    fn compute_version_deterministic() {
+        let input = "some ticket content";
+        let v1 = compute_version(input);
+        let v2 = compute_version(input);
+        assert_eq!(v1, v2, "same input must produce same version");
+        assert_eq!(v1.len(), 16);
+        assert!(v1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn compute_version_different_for_different_input() {
+        let v1 = compute_version("content A");
+        let v2 = compute_version("content B");
+        assert_ne!(v1, v2, "different input must produce different version");
+    }
+
+    #[test]
+    fn extract_version_from_yaml_present() {
+        let content = "---\nid: vi-0001\nversion: abcdef0123456789\ntitle: Test\n---\n";
+        let v = extract_version_from_yaml(content);
+        assert_eq!(v, Some("abcdef0123456789".to_string()));
+    }
+
+    #[test]
+    fn extract_version_from_yaml_absent() {
+        let content = "---\nid: vi-0001\ntitle: Test\n---\n";
+        let v = extract_version_from_yaml(content);
+        assert_eq!(v, None);
+    }
+
+    #[test]
+    fn extract_version_from_yaml_quoted() {
+        let content = "---\nid: vi-0001\nversion: \"abcdef0123456789\"\ntitle: Test\n---\n";
+        let v = extract_version_from_yaml(content);
+        assert_eq!(v, Some("abcdef0123456789".to_string()));
+    }
+
+    #[test]
+    fn insert_version_line_places_after_id() {
+        let content = "---\nid: vi-0001\ntitle: Test\nstatus: open\n---\n";
+        let result = insert_version_line(content, "abcdef0123456789");
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines[0], "---");
+        assert_eq!(lines[1], "id: vi-0001");
+        assert_eq!(lines[2], "version: \"abcdef0123456789\"");
+        assert_eq!(lines[3], "title: Test");
+    }
+
+    // ── write_ticket version match succeeds ──────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_succeeds_when_version_matches() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let ticket = make_minimal_ticket("ver-009");
+        store.write_ticket(&ticket).unwrap();
+
+        // Read back (gets current version), modify, write — should succeed
+        let mut t = store.read_ticket("ver-009").unwrap();
+        assert!(t.version.is_some());
+        t.title = "Updated title".to_string();
+        let result = store.write_ticket(&t);
+        assert!(
+            result.is_ok(),
+            "write with matching version should succeed: {:?}",
+            result
+        );
+
+        // Verify the version changed
+        let t2 = store.read_ticket("ver-009").unwrap();
+        assert_ne!(
+            t.version, t2.version,
+            "version should change after content change"
+        );
+    }
+
+    // ── round-trip with modification ─────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_round_trip_modify_refreshes_version() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let ticket = make_minimal_ticket("ver-010");
+        store.write_ticket(&ticket).unwrap();
+        let v1 = store.read_ticket("ver-010").unwrap().version.unwrap();
+
+        // Read → modify → write → read: version should change
+        let mut t = store.read_ticket("ver-010").unwrap();
+        t.title = "Modified".to_string();
+        store.write_ticket(&t).unwrap();
+        let v2 = store.read_ticket("ver-010").unwrap().version.unwrap();
+        assert_ne!(v1, v2);
+
+        // Read → modify again → write → read: version should change again
+        let mut t2 = store.read_ticket("ver-010").unwrap();
+        t2.title = "Modified again".to_string();
+        store.write_ticket(&t2).unwrap();
+        let v3 = store.read_ticket("ver-010").unwrap().version.unwrap();
+        assert_ne!(v2, v3);
     }
 }

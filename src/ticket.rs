@@ -65,6 +65,8 @@ pub struct Note {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticket {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     pub title: String,
     pub status: Status,
     #[serde(rename = "type")]
@@ -117,6 +119,7 @@ mod tests {
     fn serialize_ticket_field_names() {
         let ticket = Ticket {
             id: "abc".to_string(),
+            version: None,
             title: "Test".to_string(),
             status: Status::Open,
             ticket_type: TicketType::Task,
@@ -168,6 +171,7 @@ mod tests {
     fn serde_round_trip() {
         let original = Ticket {
             id: "xyz".to_string(),
+            version: None,
             title: "Round trip".to_string(),
             status: Status::InProgress,
             ticket_type: TicketType::Bug,
@@ -231,6 +235,7 @@ mod tests {
     fn skip_serializing_none_fields_omitted() {
         let ticket = Ticket {
             id: "t-0001".to_string(),
+            version: None,
             title: "Minimal".to_string(),
             status: Status::Open,
             ticket_type: TicketType::Task,
@@ -265,6 +270,7 @@ mod tests {
     fn assignee_estimate_tags_all_set() {
         let ticket = Ticket {
             id: "t-0002".to_string(),
+            version: None,
             title: "Full optional".to_string(),
             status: Status::Open,
             ticket_type: TicketType::Feature,
@@ -349,6 +355,7 @@ mod tests {
     fn ticket_all_optional_fields_round_trip() {
         let original = Ticket {
             id: "t-full".to_string(),
+            version: None,
             title: "Everything set".to_string(),
             status: Status::Closed,
             ticket_type: TicketType::Epic,
@@ -404,6 +411,7 @@ mod tests {
     fn empty_tags_serialized_as_array() {
         let ticket = Ticket {
             id: "t-0004".to_string(),
+            version: None,
             title: "No tags".to_string(),
             status: Status::Open,
             ticket_type: TicketType::Chore,
