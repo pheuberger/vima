@@ -73,3 +73,27 @@ fn help_unknown_command_json_exits_nonzero() {
 
     assert!(!output.status.success());
 }
+
+#[test]
+fn unrecognized_flag_includes_available_flags() {
+    let output = vima_bin()
+        .args(["list", "--nonexistent-flag"])
+        .output()
+        .expect("failed to run vima");
+
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let err: serde_json::Value =
+        serde_json::from_str(stderr.trim()).expect("stderr should be JSON");
+    assert_eq!(err["error"], "invalid_argument");
+    let flags = err["available_flags"].as_array().expect("should have available_flags");
+    assert!(
+        flags.iter().any(|f| f == "--pluck"),
+        "available_flags should include --pluck"
+    );
+    assert!(
+        flags.iter().any(|f| f == "--status"),
+        "available_flags should include --status"
+    );
+}

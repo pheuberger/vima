@@ -1180,11 +1180,59 @@ fn main() {
         return;
     }
 
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            // Convert clap errors to structured JSON on stderr
+            let message = e.to_string();
+            // Extract the subcommand name from args to suggest available flags
+            let subcmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
+            let available = available_flags_for_command(subcmd);
+            let mut json = serde_json::json!({
+                "error": "invalid_argument",
+                "message": message.trim(),
+            });
+            if !available.is_empty() {
+                json["available_flags"] = serde_json::json!(available);
+            }
+            use std::io::Write;
+            let _ = writeln!(std::io::stderr(), "{}", json);
+            std::process::exit(2);
+        }
+    };
 
     if let Err(err) = dispatch(cli) {
         error::log_error(&err);
         std::process::exit(err.exit_code());
+    }
+}
+
+/// Return the available flags for a given subcommand name.
+fn available_flags_for_command(subcmd: &str) -> Vec<&'static str> {
+    match subcmd {
+        "list" | "ready" | "blocked" => vec![
+            "--status", "--tag", "--type", "--priority", "--assignee",
+            "--limit", "--pluck", "--count", "--full",
+        ],
+        "closed" => vec!["--limit", "--pluck", "--count", "--full"],
+        "create" => vec![
+            "--id", "--priority", "--tags", "--type", "--assignee",
+            "--estimate", "--description", "--parent", "--dep",
+            "--json", "--batch",
+        ],
+        "update" => vec![
+            "--title", "--priority", "--tags", "--type", "--assignee",
+            "--estimate", "--description", "--status", "--version",
+            "--json",
+        ],
+        "show" => vec![],
+        "start" => vec!["--assignee"],
+        "close" => vec!["--reason"],
+        "dep" => vec![],
+        "link" | "unlink" | "undep" | "reopen" | "is-ready" | "add-note" => vec![],
+        "init" => vec!["--prefix"],
+        "help" => vec!["--json", "--brief"],
+        _ => vec![],
     }
 }
 
