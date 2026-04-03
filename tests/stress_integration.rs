@@ -207,6 +207,21 @@ fn stress_dependency_chain_100() {
         "dep tree on 100-chain took {:?}",
         elapsed
     );
+
+    // --flat output should be parseable as JSON even for deep chains
+    let flat_output = vima_cmd(&tmp)
+        .args(["dep", "tree", "s4-c099", "--full", "--flat"])
+        .output()
+        .unwrap();
+    assert!(flat_output.status.success());
+    let flat: Vec<serde_json::Value> =
+        serde_json::from_slice(&flat_output.stdout).expect("--flat output should be valid JSON");
+    assert_eq!(flat.len(), 100, "flat tree should have 100 entries");
+    assert_eq!(flat[0]["id"], "s4-c099");
+    assert!(flat[0]["parent_id"].is_null());
+    assert_eq!(flat[0]["depth"], 0);
+    assert_eq!(flat[99]["id"], "s4-c000");
+    assert_eq!(flat[99]["depth"], 99);
 }
 
 // ── Stress: dep cycle detection on 100 tickets ─────────────────────────

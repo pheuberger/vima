@@ -643,7 +643,10 @@ fn cmd_dep_tree(args: cli::TreeArgs, exact: bool, pretty: bool) -> Result<()> {
     let id = st.resolve_id(&args.id, exact)?;
     let tickets = st.read_all()?;
     let tree = deps::build_dep_tree(&tickets, &id, args.full)?;
-    if pretty {
+    if args.flat {
+        let flat = deps::flatten_tree(&tree);
+        println!("{}", serde_json::to_string(&flat)?);
+    } else if pretty {
         output::pretty_tree(&tree);
     } else {
         println!("{}", serde_json::to_string(&tree)?);
@@ -3968,6 +3971,7 @@ notes: []
             cli::TreeArgs {
                 id: "pt-tree-c".to_string(),
                 full: false,
+                flat: false,
             },
             true,
             true,

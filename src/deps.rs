@@ -13,6 +13,40 @@ pub struct TreeNode {
     pub deps: Vec<TreeNode>,
 }
 
+#[derive(Serialize, Debug)]
+pub struct FlatNode {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub depth: usize,
+    pub status: Status,
+    pub title: String,
+}
+
+/// Flatten a nested TreeNode into a depth-first array of FlatNode entries.
+pub fn flatten_tree(tree: &TreeNode) -> Vec<FlatNode> {
+    let mut result = Vec::new();
+    flatten_recursive(tree, None, 0, &mut result);
+    result
+}
+
+fn flatten_recursive(
+    node: &TreeNode,
+    parent_id: Option<&str>,
+    depth: usize,
+    result: &mut Vec<FlatNode>,
+) {
+    result.push(FlatNode {
+        id: node.id.clone(),
+        parent_id: parent_id.map(|s| s.to_string()),
+        depth,
+        status: node.status.clone(),
+        title: node.title.clone(),
+    });
+    for child in &node.deps {
+        flatten_recursive(child, Some(&node.id), depth + 1, result);
+    }
+}
+
 /// Build a dependency tree rooted at `root_id`.
 /// In dedup mode (full=false): each node appears once at its deepest position.
 /// In full mode (full=true): nodes may repeat, but cycles are still marked.
@@ -1090,5 +1124,84 @@ mod tests {
             blocks: vec![],
             children: vec![],
         }
+    }
+
+    #[test]
+    fn flatten_tree_single_node() {
+        let tree = TreeNode {
+            id: "a".into(),
+            status: Status::Open,
+            title: "Root".into(),
+            deps: vec![],
+        };
+        let flat = flatten_tree(&tree);
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].id, "a");
+        assert!(flat[0].parent_id.is_none());
+        assert_eq!(flat[0].depth, 0);
+    }
+
+    #[test]
+    fn flatten_tree_chain() {
+        let tree = TreeNode {
+            id: "a".into(),
+            status: Status::Open,
+            title: "Root".into(),
+            deps: vec![TreeNode {
+                id: "b".into(),
+                status: Status::Open,
+                title: "Mid".into(),
+                deps: vec![TreeNode {
+                    id: "c".into(),
+                    status: Status::Closed,
+                    title: "Leaf".into(),
+                    deps: vec![],
+                }],
+            }],
+        };
+        let flat = flatten_tree(&tree);
+        assert_eq!(flat.len(), 3);
+        assert_eq!(flat[0].id, "a");
+        assert_eq!(flat[0].depth, 0);
+        assert!(flat[0].parent_id.is_none());
+
+        assert_eq!(flat[1].id, "b");
+        assert_eq!(flat[1].depth, 1);
+        assert_eq!(flat[1].parent_id.as_deref(), Some("a"));
+
+        assert_eq!(flat[2].id, "c");
+        assert_eq!(flat[2].depth, 2);
+        assert_eq!(flat[2].parent_id.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn flatten_tree_branching() {
+        let tree = TreeNode {
+            id: "root".into(),
+            status: Status::Open,
+            title: "Root".into(),
+            deps: vec![
+                TreeNode {
+                    id: "left".into(),
+                    status: Status::Open,
+                    title: "Left".into(),
+                    deps: vec![],
+                },
+                TreeNode {
+                    id: "right".into(),
+                    status: Status::Open,
+                    title: "Right".into(),
+                    deps: vec![],
+                },
+            ],
+        };
+        let flat = flatten_tree(&tree);
+        assert_eq!(flat.len(), 3);
+        assert_eq!(flat[0].id, "root");
+        // Children appear in order
+        assert_eq!(flat[1].id, "left");
+        assert_eq!(flat[1].parent_id.as_deref(), Some("root"));
+        assert_eq!(flat[2].id, "right");
+        assert_eq!(flat[2].parent_id.as_deref(), Some("root"));
     }
 }

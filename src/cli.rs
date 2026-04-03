@@ -342,6 +342,10 @@ pub struct TreeArgs {
     /// Show full transitive tree
     #[arg(long)]
     pub full: bool,
+
+    /// Output as flat array of {id, parent_id, depth, status, title} objects
+    #[arg(long)]
+    pub flat: bool,
 }
 
 #[cfg(test)]
