@@ -304,31 +304,59 @@ Plugins receive these environment variables:
 
 ## Agent integration
 
-vima is designed as an **agent-first** tool. Agents can discover the full command schema at runtime:
+vima is designed **agent-first**: AI agents (Claude Code, Cursor, Copilot, Devin, etc.) are the primary user. Every design decision optimizes for machine consumption — structured output, deterministic behavior, token efficiency, and zero interactivity.
+
+### Discovery
+
+Agents discover vima's full command schema at runtime:
 
 ```sh
 vima help --json
 ```
 
-This returns structured JSON with every command, flag, positional argument, subcommand, and description — everything an agent needs to construct valid invocations without guessing.
+This returns structured JSON with every command, flag, positional argument, subcommand, and description — everything an agent needs to construct valid invocations without guessing. The schema always reflects the installed version, so documentation never goes stale.
 
-Add this line to your project's `CLAUDE.md`, `AGENTS.md`, or equivalent:
+Add this to your project's `CLAUDE.md`, `AGENTS.md`, or equivalent:
 
 ```
 This project uses `vima` for ticket tracking. Run `vima help --json` for the full command schema.
 ```
 
-Key properties that make vima agent-friendly:
+### Why agents prefer vima
 
-- **`help --json`**: runtime-discoverable command schema — no static docs to go stale
-- **JSON everywhere**: all output is structured JSON, parseable without regex
-- **Deterministic exit codes**: agents can branch on success/failure without parsing
-- **`--exact` mode**: set `VIMA_EXACT=1` to prevent fuzzy matching surprises in automation
-- **`--pluck` and `--count`**: extract exactly the data needed without post-processing
-- **Batch create**: build entire ticket graphs in a single command with back-references
-- **No interactive prompts**: every operation is a single non-interactive command
-- **File-based storage**: agents can read/write `.vima/tickets/*.md` directly if needed
-- **Atomic writes**: crash-safe file operations via temp-file-then-rename
+| Property | How it helps agents |
+|----------|-------------------|
+| **JSON everywhere** | All output is structured NDJSON — parseable without regex, composable with `jq` |
+| **`help --json`** | Runtime-discoverable schema — agents self-serve instead of reading docs |
+| **Deterministic exit codes** | Branch on 0/1/2 without parsing output text |
+| **`--exact` mode** | `VIMA_EXACT=1` prevents fuzzy matching surprises in automation |
+| **`--pluck` and `--count`** | Extract exactly the data needed — minimizes token consumption |
+| **`--full` opt-in** | Heavy fields (description, notes, body) excluded by default, saving tokens |
+| **Batch create** | Build entire ticket graphs in one command with `$1`, `$2` back-references |
+| **No interactive prompts** | Every operation is a single non-interactive command — no TTY required |
+| **Structured errors** | JSON errors on stderr with `error` type, `message`, and context fields |
+| **Atomic writes** | Crash-safe via temp-file-then-rename — safe for concurrent agent use |
+| **File-based storage** | Tickets are plain Markdown — diff, merge, and review in PRs like code |
+
+### Token-efficient patterns
+
+Agents pay per token. Use these patterns to minimize context window consumption:
+
+```sh
+# Bad: dumps all fields for all tickets (hundreds of tokens per ticket)
+vima list
+
+# Good: only what you need (< 20 tokens per ticket)
+vima list --pluck id,title,status
+
+# Best: just check if there's work (1 token)
+vima list --count
+
+# Only load heavy fields when you actually need them
+vima show ID                   # includes description, notes
+vima list --pluck id           # lightweight scan
+vima list --full               # opt-in to heavy fields in lists
+```
 
 ### Agent workflow example
 
@@ -346,6 +374,26 @@ vima add-note "$NEXT" "Implemented in commit abc123"
 
 # Close it
 vima close "$NEXT" --reason "Shipped in PR #42"
+```
+
+### Multi-agent / automation setup
+
+```sh
+# Prevent fuzzy matching surprises in automation
+export VIMA_EXACT=1
+
+# Point to a shared store across worktrees
+export VIMA_DIR=~/work/.vima
+
+# Batch-create a dependency graph atomically
+vima create --batch <<'EOF'
+[
+  {"title": "Design API", "type": "task", "priority": 1, "id": "design"},
+  {"title": "Implement API", "dep": ["$1"]},
+  {"title": "Write tests", "dep": ["$2"]},
+  {"title": "Deploy", "dep": ["$2", "$3"]}
+]
+EOF
 ```
 
 ## Development

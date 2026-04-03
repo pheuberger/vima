@@ -4,9 +4,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-vima is a file-based, agent-first ticket tracker. Tickets are Markdown files with YAML frontmatter stored in `.vima/tickets/`. All output is newline-delimited JSON. Written in Rust.
+vima is a file-based, **agent-first** ticket tracker. Tickets are Markdown files with YAML frontmatter stored in `.vima/tickets/`. All output is newline-delimited JSON. Written in Rust.
 
 This project uses vima itself as its **only** ticket tracker — all work is tracked exclusively via the `vima` CLI (available on PATH). Do not use any other issue-tracking system. Always use `vima` commands to create, list, update, and close tickets. **Never read or write `.vima/tickets/` files directly** — use the CLI for everything.
+
+## Agent-first design philosophy
+
+vima is built for AI agents as the primary user. Every design decision optimizes for machine consumption first, human convenience second. When adding features or modifying behavior, apply these principles:
+
+### Core principles
+
+1. **Structured output always** — JSON to stdout, errors to stderr. Never mix human prose into stdout. Agents parse stdout; humans read stderr and `--pretty`.
+2. **Token efficiency** — Every token an agent reads costs money and context window space. Use `--pluck` to return only needed fields. Default list output excludes heavy fields (description, notes, body); use `--full` to include them. Prefer concise field names.
+3. **Deterministic behavior** — Same input must produce same output. No interactive prompts, no pagers, no color codes in stdout. Exit codes encode status for branching without parsing.
+4. **Progressive disclosure** — `help --json` gives full schema; per-command help gives focused detail. Don't dump everything upfront. Agents should load only what they need.
+5. **Idempotency where possible** — Agents retry. Design commands so repeated calls are safe or produce clear conflict signals (distinct exit codes).
+6. **Actionable errors** — Error messages should include recovery suggestions. An error that says "not found" is less useful than one that says "not found — run `vima list --pluck id` to see available tickets".
+7. **Batch-native** — Agents generate structured data naturally. Accept JSON on stdin for bulk operations. Support back-references for building graphs atomically.
+
+### Anti-patterns to avoid
+
+- Never add interactive prompts or TTY-dependent behavior to commands
+- Never output unstructured prose to stdout (use stderr for human messages)
+- Never add features that require parsing regex patterns from output
+- Never break JSON output format for existing commands
+- Never add flags that only make sense for human interactive use without a machine equivalent
+- Never require multiple round-trips when a single command could suffice
+
+### When designing new commands
+
+- Default output should be JSON, parseable by `jq`
+- Add `--pluck` and `--count` support to any list-like command
+- Use semantic exit codes: 0=success, 1=error, 2=cycle/blocked
+- Include the command in `help --json` schema automatically
+- Write error types in `error.rs` with structured fields, not just messages
+- Consider: "Can an agent use this without reading documentation first?"
 
 ## Commit conventions
 
@@ -74,10 +106,13 @@ vima close ID [--reason "..."]
 vima start ID                 # set status → in_progress
 ```
 
-**Output manipulation**:
+**Context-efficient output** (minimize tokens consumed by agent):
 ```bash
-vima list --pluck id          # print IDs only
-vima list --count             # count of open tickets
+vima list --pluck id          # IDs only — use this to check what exists
+vima list --pluck id,title    # minimal summary
+vima list --count             # just the count, no records
+vima show ID --pluck status   # single field from single ticket
+vima list --full              # include heavy fields only when needed
 ```
 
 **Dependencies**:
@@ -101,3 +136,6 @@ EOF
 - Set `VIMA_EXACT=1` (or `--exact`) to disable partial ID matching
 - All commands exit 0 on success, non-zero on error
 - Errors are JSON on stderr with `error`, `message`, and context fields
+- Use `--pluck` aggressively to minimize output tokens
+- Pipe `--pluck id` output to subsequent commands for workflows
+- Use `--count` instead of piping to `wc -l`
