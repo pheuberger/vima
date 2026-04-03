@@ -1,0 +1,65 @@
+# vima
+
+> Agent-first ticket tracker. Tickets are Markdown files with YAML frontmatter. All output is JSON.
+
+## Quick start
+
+```sh
+vima help --json                    # full command schema (runtime-discoverable)
+vima create "Title" -t task -p 2    # create a ticket
+vima list --pluck id,title          # list open tickets (minimal fields)
+vima show ID                        # full ticket detail
+vima start ID                       # mark in_progress
+vima close ID --reason "Done"       # close with reason
+```
+
+## Key commands
+
+- `create "Title" [flags]` — create ticket. Flags: `-t type`, `-p priority`, `--dep ID`, `--tags a,b`, `--batch` for JSON stdin
+- `list [filters]` — open tickets. Filters: `--tag`, `--type`, `--priority`, `--assignee`, `--status`
+- `ready` — tickets with no open dependencies
+- `blocked` — tickets with open dependencies
+- `closed` — closed tickets
+- `show ID` — single ticket detail
+- `update ID [flags]` — update fields: `--title`, `--description`, `--priority`, `--tags`, `--status`, `--type`
+- `start ID` — set status to in_progress
+- `close ID [--reason]` — close ticket(s)
+- `reopen ID` — reopen closed ticket
+- `dep add ID DEP` — add dependency; `--blocks` reverses direction
+- `dep tree ID` — show dependency tree
+- `is-ready ID` — exit 0 if ready, 2 if blocked
+- `add-note ID "text"` — add note (reads stdin if no text arg)
+
+## Output control
+
+- Default: NDJSON (one JSON object per line)
+- `--pluck FIELD` — extract single field (bare value) or `--pluck a,b` (object)
+- `--count` — integer count only
+- `--full` — include heavy fields (description, notes, body) in list output
+- `--pretty` — human-readable colored table
+
+## Exit codes
+
+- 0: success
+- 1: general error (invalid_field, io_error, yaml_error, etc.)
+- 2: cycle detected or ticket blocked
+- 3: not found or ambiguous ID
+- 4: conflict (id_exists)
+
+## Error format (stderr)
+
+```json
+{"error":"not_found","message":"ticket not found: xyz","suggestion":"run `vima list --pluck id` to see available tickets"}
+{"error":"ambiguous_id","message":"ambiguous id 'ab': matches ab-1234, ab-5678","matches":["ab-1234","ab-5678"],"suggestion":"use --exact or provide more characters of the ID"}
+```
+
+## Automation
+
+- `VIMA_EXACT=1` or `--exact` — disable fuzzy ID matching
+- `--batch` — create multiple tickets from JSON stdin with `$1`, `$2` back-references
+- No interactive prompts — fully non-interactive by design
+- JSON to stdout, errors to stderr — pipe-safe
+
+## Storage
+
+Tickets are `.vima/tickets/{id}.md` — Markdown with YAML frontmatter. Diffs and merges like code. vima walks up the directory tree to find `.vima/`, or use `VIMA_DIR` env var.
