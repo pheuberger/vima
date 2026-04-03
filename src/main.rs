@@ -1090,27 +1090,65 @@ fn dispatch(cli: Cli) -> Result<()> {
     let pretty = cli.pretty;
     let dry_run = cli.dry_run;
     colored::control::set_override(pretty);
+
+    // Commands that don't need the store skip locking entirely
+    match &cli.command {
+        Commands::Init(_) | Commands::Help(_) | Commands::External(_) => {}
+        _ => {
+            // Determine if the command mutates the store
+            let is_mutating = matches!(
+                &cli.command,
+                Commands::Create(_)
+                    | Commands::Update(_)
+                    | Commands::Start(_)
+                    | Commands::Close(_)
+                    | Commands::Reopen(_)
+                    | Commands::AddNote(_)
+                    | Commands::Undep(_)
+                    | Commands::Link(_)
+                    | Commands::Unlink(_)
+                    | Commands::Dep(cli::DepArgs {
+                        command: cli::DepCommands::Add(_),
+                        ..
+                    })
+            );
+            // Acquire lock — the guard is held for the duration of this scope.
+            // Mutating commands get exclusive access; read-only get shared.
+            let store = store::Store::open()?;
+            let _lock = if is_mutating {
+                store.lock_exclusive()?
+            } else {
+                store.lock_shared()?
+            };
+            // Lock is held while the command runs, then released on drop
+            return match cli.command {
+                Commands::Create(args) => cmd_create(args, exact, dry_run),
+                Commands::Show(args) => cmd_show(args, exact, pretty),
+                Commands::List(args) => cmd_list(args, pretty),
+                Commands::Ready(args) => cmd_ready(args, pretty),
+                Commands::Blocked(args) => cmd_blocked(args, pretty),
+                Commands::Closed(args) => cmd_closed(args, pretty),
+                Commands::Update(args) => cmd_update(args, exact, dry_run),
+                Commands::Start(args) => cmd_start(args, exact, dry_run),
+                Commands::Close(args) => cmd_close(args, exact, dry_run),
+                Commands::Reopen(args) => cmd_reopen(args, exact, dry_run),
+                Commands::IsReady(args) => cmd_is_ready(args, exact),
+                Commands::AddNote(args) => cmd_add_note(args, exact),
+                Commands::Dep(dep_args) => match dep_args.command {
+                    cli::DepCommands::Add(add_args) => cmd_dep_add(add_args, exact, dry_run),
+                    cli::DepCommands::Tree(args) => cmd_dep_tree(args, exact, pretty),
+                    cli::DepCommands::Cycle => cmd_dep_cycle(),
+                },
+                Commands::Undep(args) => cmd_undep(args, exact),
+                Commands::Link(args) => cmd_link(args, exact),
+                Commands::Unlink(args) => cmd_unlink(args, exact),
+                _ => unreachable!(),
+            };
+        }
+    }
+
+    // Non-store commands (Init, Help, External) run without locking
     match cli.command {
-        Commands::Create(args) => cmd_create(args, exact, dry_run),
-        Commands::Show(args) => cmd_show(args, exact, pretty),
-        Commands::List(args) => cmd_list(args, pretty),
-        Commands::Ready(args) => cmd_ready(args, pretty),
-        Commands::Blocked(args) => cmd_blocked(args, pretty),
-        Commands::Closed(args) => cmd_closed(args, pretty),
-        Commands::Update(args) => cmd_update(args, exact, dry_run),
-        Commands::Start(args) => cmd_start(args, exact, dry_run),
-        Commands::Close(args) => cmd_close(args, exact, dry_run),
-        Commands::Reopen(args) => cmd_reopen(args, exact, dry_run),
-        Commands::IsReady(args) => cmd_is_ready(args, exact),
-        Commands::AddNote(args) => cmd_add_note(args, exact),
-        Commands::Dep(dep_args) => match dep_args.command {
-            cli::DepCommands::Add(add_args) => cmd_dep_add(add_args, exact, dry_run),
-            cli::DepCommands::Tree(args) => cmd_dep_tree(args, exact, pretty),
-            cli::DepCommands::Cycle => cmd_dep_cycle(),
-        },
-        Commands::Undep(args) => cmd_undep(args, exact),
-        Commands::Link(args) => cmd_link(args, exact),
-        Commands::Unlink(args) => cmd_unlink(args, exact),
         Commands::Init(args) => cmd_init(args),
         Commands::Help(args) => cmd_help(args),
         Commands::External(args) => {
@@ -1120,6 +1158,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                 Some(result) => result,
             }
         }
+        _ => unreachable!(),
     }
 }
 

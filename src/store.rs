@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt;
 use gray_matter::engine::YAML;
 use gray_matter::Matter;
 use sha2::{Digest, Sha256};
@@ -172,12 +173,43 @@ pub struct Store {
     tickets: PathBuf,
 }
 
+/// RAII guard that holds a file lock. The lock is released when the guard is dropped.
+pub struct LockGuard {
+    _file: fs::File,
+}
+
 impl Store {
     pub fn open() -> Result<Self> {
         let root = find_vima_root()?;
         let tickets = root.join("tickets");
         fs::create_dir_all(&tickets)?;
         Ok(Store { root, tickets })
+    }
+
+    /// Acquire an exclusive (write) advisory lock on `.vima/lock`.
+    /// Returns a guard that releases the lock on drop.
+    pub fn lock_exclusive(&self) -> Result<LockGuard> {
+        let lock_path = self.root.join("lock");
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)?;
+        file.lock_exclusive()?;
+        Ok(LockGuard { _file: file })
+    }
+
+    /// Acquire a shared (read) advisory lock on `.vima/lock`.
+    /// Returns a guard that releases the lock on drop.
+    pub fn lock_shared(&self) -> Result<LockGuard> {
+        let lock_path = self.root.join("lock");
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)?;
+        file.lock_shared()?;
+        Ok(LockGuard { _file: file })
     }
 
     pub fn read_ticket(&self, id: &str) -> Result<Ticket> {
@@ -1469,5 +1501,123 @@ notes: []
         store.write_ticket(&t2).unwrap();
         let v3 = store.read_ticket("ver-010").unwrap().version.unwrap();
         assert_ne!(v2, v3);
+    }
+
+    // ── File locking tests ────────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn lock_exclusive_creates_lock_file() {
+        let tmp = make_temp();
+        let vima_dir = tmp.path().join(".vima");
+        fs::create_dir_all(vima_dir.join("tickets")).unwrap();
+        unsafe { std::env::set_var("VIMA_DIR", &vima_dir) };
+
+        let store = Store::open().unwrap();
+        let _guard = store.lock_exclusive().unwrap();
+
+        assert!(vima_dir.join("lock").exists());
+
+        unsafe { std::env::remove_var("VIMA_DIR") };
+    }
+
+    #[test]
+    #[serial(env)]
+    fn lock_shared_creates_lock_file() {
+        let tmp = make_temp();
+        let vima_dir = tmp.path().join(".vima");
+        fs::create_dir_all(vima_dir.join("tickets")).unwrap();
+        unsafe { std::env::set_var("VIMA_DIR", &vima_dir) };
+
+        let store = Store::open().unwrap();
+        let _guard = store.lock_shared().unwrap();
+
+        assert!(vima_dir.join("lock").exists());
+
+        unsafe { std::env::remove_var("VIMA_DIR") };
+    }
+
+    #[test]
+    #[serial(env)]
+    fn multiple_shared_locks_do_not_block() {
+        let tmp = make_temp();
+        let vima_dir = tmp.path().join(".vima");
+        fs::create_dir_all(vima_dir.join("tickets")).unwrap();
+        unsafe { std::env::set_var("VIMA_DIR", &vima_dir) };
+
+        let store = Store::open().unwrap();
+        let _guard1 = store.lock_shared().unwrap();
+        let _guard2 = store.lock_shared().unwrap();
+        // Both acquired without blocking
+
+        unsafe { std::env::remove_var("VIMA_DIR") };
+    }
+
+    #[test]
+    #[serial(env)]
+    fn lock_released_on_guard_drop() {
+        let tmp = make_temp();
+        let vima_dir = tmp.path().join(".vima");
+        fs::create_dir_all(vima_dir.join("tickets")).unwrap();
+        unsafe { std::env::set_var("VIMA_DIR", &vima_dir) };
+
+        let store = Store::open().unwrap();
+        {
+            let _guard = store.lock_exclusive().unwrap();
+            // Lock held here
+        }
+        // Lock released — we should be able to acquire again
+        let _guard2 = store.lock_exclusive().unwrap();
+
+        unsafe { std::env::remove_var("VIMA_DIR") };
+    }
+
+    #[test]
+    #[serial(env)]
+    fn exclusive_lock_blocks_second_exclusive() {
+        use std::sync::{Arc, Barrier};
+
+        let tmp = make_temp();
+        let vima_dir = tmp.path().join(".vima");
+        fs::create_dir_all(vima_dir.join("tickets")).unwrap();
+
+        let lock_path = vima_dir.join("lock");
+        let lock_path_clone = lock_path.clone();
+
+        let barrier = Arc::new(Barrier::new(2));
+        let barrier_clone = barrier.clone();
+
+        // Thread 1: acquire exclusive lock, hold it until barrier
+        let t1 = std::thread::spawn(move || {
+            let file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(&lock_path_clone)
+                .unwrap();
+            file.lock_exclusive().unwrap();
+            barrier_clone.wait(); // signal thread 2 that lock is held
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            // Lock released on drop
+        });
+
+        // Thread 2: wait for thread 1 to acquire, then try non-blocking
+        barrier.wait();
+        let file2 = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .unwrap();
+        let result = file2.try_lock_exclusive();
+        // Should fail because thread 1 holds the lock
+        assert!(
+            result.is_err(),
+            "second exclusive lock should fail while first is held"
+        );
+
+        t1.join().unwrap();
+        // Now it should succeed
+        file2.lock_exclusive().unwrap();
     }
 }
