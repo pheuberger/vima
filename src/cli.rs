@@ -3,7 +3,11 @@ use clap::{Args, Parser, Subcommand};
 use crate::ticket::{Status, TicketType};
 
 #[derive(Parser, Debug)]
-#[command(name = "vima", about = "AI-agent-first ticketing CLI", disable_help_subcommand = true)]
+#[command(
+    name = "vima",
+    about = "AI-agent-first ticketing CLI",
+    disable_help_subcommand = true
+)]
 pub struct Cli {
     /// Output in human-readable pretty format
     #[arg(long, global = true)]
@@ -12,6 +16,10 @@ pub struct Cli {
     /// Use exact ID matching (no partial match)
     #[arg(long, global = true, env = "VIMA_EXACT")]
     pub exact: bool,
+
+    /// Preview changes without persisting (dry run)
+    #[arg(long, global = true)]
+    pub dry_run: bool,
 
     #[command(subcommand)]
     pub command: Commands,
@@ -116,6 +124,10 @@ pub struct CreateArgs {
     /// Batch create from JSON
     #[arg(long)]
     pub batch: bool,
+
+    /// Create from JSON object (all fields in one argument)
+    #[arg(long)]
+    pub json: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -162,6 +174,10 @@ pub struct UpdateArgs {
     /// New type
     #[arg(short = 't', long = "type")]
     pub ticket_type: Option<TicketType>,
+
+    /// Update from JSON object (all fields in one argument)
+    #[arg(long)]
+    pub json: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -273,6 +289,10 @@ pub struct HelpArgs {
     /// Output help as JSON (for agent consumption)
     #[arg(long)]
     pub json: bool,
+
+    /// Output brief index: command names and one-line descriptions only
+    #[arg(long)]
+    pub brief: bool,
 }
 
 #[derive(Args, Debug)]
@@ -408,15 +428,10 @@ mod tests {
     #[test]
     fn filter_args_parsed_correctly() {
         let cli = parse(&[
-            "vima", "list",
-            "--tag", "backend",
-            "--tag", "urgent",
-            "-t", "bug",
-            "-p", "0-2",
-            "-a", "alice",
-            "--count",
-            "--limit", "10",
-        ]).unwrap();
+            "vima", "list", "--tag", "backend", "--tag", "urgent", "-t", "bug", "-p", "0-2", "-a",
+            "alice", "--count", "--limit", "10",
+        ])
+        .unwrap();
         if let Commands::List(f) = cli.command {
             assert_eq!(f.tag, vec!["backend", "urgent"]);
             assert_eq!(f.ticket_type, Some(TicketType::Bug));
@@ -433,11 +448,9 @@ mod tests {
     #[test]
     fn create_multiple_deps() {
         let cli = parse(&[
-            "vima", "create", "Title",
-            "--dep", "vi-0001",
-            "--dep", "vi-0002",
-            "--dep", "vi-0003",
-        ]).unwrap();
+            "vima", "create", "Title", "--dep", "vi-0001", "--dep", "vi-0002", "--dep", "vi-0003",
+        ])
+        .unwrap();
         if let Commands::Create(args) = cli.command {
             assert_eq!(args.dep, vec!["vi-0001", "vi-0002", "vi-0003"]);
         } else {
@@ -449,10 +462,9 @@ mod tests {
     #[test]
     fn create_multiple_blocks() {
         let cli = parse(&[
-            "vima", "create", "Title",
-            "--blocks", "vi-0001",
-            "--blocks", "vi-0002",
-        ]).unwrap();
+            "vima", "create", "Title", "--blocks", "vi-0001", "--blocks", "vi-0002",
+        ])
+        .unwrap();
         if let Commands::Create(args) = cli.command {
             assert_eq!(args.blocks, vec!["vi-0001", "vi-0002"]);
         } else {
@@ -464,9 +476,8 @@ mod tests {
     #[test]
     fn all_subcommands_recognized() {
         let subcommands = [
-            "create", "show", "list", "ready", "blocked", "closed",
-            "update", "start", "close", "reopen", "is-ready",
-            "add-note", "dep", "undep", "link", "unlink", "init", "help",
+            "create", "show", "list", "ready", "blocked", "closed", "update", "start", "close",
+            "reopen", "is-ready", "add-note", "dep", "undep", "link", "unlink", "init", "help",
         ];
         for sub in &subcommands {
             // Each subcommand without required args should give a usage error, not "unknown subcommand"
@@ -526,9 +537,14 @@ mod tests {
     #[test]
     fn close_multiple_ids_with_reason() {
         let cli = parse(&[
-            "vima", "close", "vi-0001", "vi-0002",
-            "--reason", "duplicate",
-        ]).unwrap();
+            "vima",
+            "close",
+            "vi-0001",
+            "vi-0002",
+            "--reason",
+            "duplicate",
+        ])
+        .unwrap();
         if let Commands::Close(args) = cli.command {
             assert_eq!(args.ids, vec!["vi-0001", "vi-0002"]);
             assert_eq!(args.reason, Some("duplicate".to_string()));

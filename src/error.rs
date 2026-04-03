@@ -30,13 +30,33 @@ impl Error {
         }
     }
 
+    pub fn suggestion(&self) -> &'static str {
+        match self {
+            Error::NotFound(_) => "run `vima list --pluck id` to see available tickets",
+            Error::AmbiguousId(_, _) => "use --exact or provide more characters of the ID",
+            Error::Cycle(_) => {
+                "run `vima dep cycle` to inspect the cycle, then `vima undep` to break it"
+            }
+            Error::InvalidBackref(_) => {
+                "back-references use $1, $2, etc. matching the order of items in the batch array"
+            }
+            Error::IdExists(_) => "choose a different --id or omit it to auto-generate",
+            Error::InvalidField(_) => {
+                "run `vima help <command> --json` to see valid fields and values"
+            }
+            Error::NoVimaDir => "run `vima init` to create a .vima/ store in this directory",
+            Error::IoError(_) => "check file permissions and disk space",
+            Error::YamlError(_) => "check input for valid YAML/JSON syntax",
+        }
+    }
+
     pub fn exit_code(&self) -> i32 {
         match self {
             Error::Cycle(_) => 2,
-            Error::NotFound(_) => 1,
-            Error::AmbiguousId(_, _) => 1,
+            Error::NotFound(_) => 3,
+            Error::AmbiguousId(_, _) => 3,
+            Error::IdExists(_) => 4,
             Error::InvalidBackref(_) => 1,
-            Error::IdExists(_) => 1,
             Error::InvalidField(_) => 1,
             Error::NoVimaDir => 1,
             Error::IoError(_) => 1,
@@ -95,7 +115,8 @@ pub fn error_json(err: &Error) -> serde_json::Value {
     let code = err.code();
     let message = err.to_string();
 
-    let mut json = serde_json::json!({"error": code, "message": message});
+    let suggestion = err.suggestion();
+    let mut json = serde_json::json!({"error": code, "message": message, "suggestion": suggestion});
     match err {
         Error::AmbiguousId(_, matches) => {
             json["matches"] = serde_json::json!(matches);
@@ -138,24 +159,33 @@ mod tests {
 
     #[test]
     fn all_variants_code() {
-        assert_eq!(Error::AmbiguousId("x".into(), vec![]).code(), "ambiguous_id");
+        assert_eq!(
+            Error::AmbiguousId("x".into(), vec![]).code(),
+            "ambiguous_id"
+        );
         assert_eq!(Error::InvalidBackref("$1".into()).code(), "invalid_backref");
         assert_eq!(Error::IdExists("abc".into()).code(), "id_exists");
         assert_eq!(Error::InvalidField("bad".into()).code(), "invalid_field");
         assert_eq!(Error::NoVimaDir.code(), "no_vima_dir");
-        assert_eq!(Error::IoError(std::io::Error::new(std::io::ErrorKind::Other, "x")).code(), "io_error");
+        assert_eq!(
+            Error::IoError(std::io::Error::new(std::io::ErrorKind::Other, "x")).code(),
+            "io_error"
+        );
         assert_eq!(Error::YamlError("msg".into()).code(), "yaml_error");
     }
 
     #[test]
     fn all_variants_exit_code() {
-        assert_eq!(Error::NotFound("x".into()).exit_code(), 1);
-        assert_eq!(Error::AmbiguousId("x".into(), vec![]).exit_code(), 1);
+        assert_eq!(Error::NotFound("x".into()).exit_code(), 3);
+        assert_eq!(Error::AmbiguousId("x".into(), vec![]).exit_code(), 3);
         assert_eq!(Error::InvalidBackref("$1".into()).exit_code(), 1);
-        assert_eq!(Error::IdExists("abc".into()).exit_code(), 1);
+        assert_eq!(Error::IdExists("abc".into()).exit_code(), 4);
         assert_eq!(Error::InvalidField("bad".into()).exit_code(), 1);
         assert_eq!(Error::NoVimaDir.exit_code(), 1);
-        assert_eq!(Error::IoError(std::io::Error::new(std::io::ErrorKind::Other, "x")).exit_code(), 1);
+        assert_eq!(
+            Error::IoError(std::io::Error::new(std::io::ErrorKind::Other, "x")).exit_code(),
+            1
+        );
         assert_eq!(Error::YamlError("msg".into()).exit_code(), 1);
     }
 
@@ -168,7 +198,8 @@ mod tests {
 
     #[test]
     fn from_serde_json_error() {
-        let json_err: serde_json::Error = serde_json::from_str::<serde_json::Value>("bad json").unwrap_err();
+        let json_err: serde_json::Error =
+            serde_json::from_str::<serde_json::Value>("bad json").unwrap_err();
         let err: Error = json_err.into();
         assert!(matches!(err, Error::YamlError(_)));
     }
@@ -179,6 +210,50 @@ mod tests {
         let json = error_json(&err);
         assert_eq!(json["matches"], serde_json::json!(["a", "b"]));
         assert_eq!(json["error"], "ambiguous_id");
+    }
+
+    // ── Suggestion tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn all_variants_have_suggestions() {
+        let variants: Vec<Error> = vec![
+            Error::NotFound("x".into()),
+            Error::AmbiguousId("x".into(), vec![]),
+            Error::Cycle(vec![]),
+            Error::InvalidBackref("$1".into()),
+            Error::IdExists("abc".into()),
+            Error::InvalidField("bad".into()),
+            Error::NoVimaDir,
+            Error::IoError(std::io::Error::new(std::io::ErrorKind::Other, "x")),
+            Error::YamlError("msg".into()),
+        ];
+        for err in &variants {
+            assert!(
+                !err.suggestion().is_empty(),
+                "suggestion empty for {:?}",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn error_json_includes_suggestion() {
+        let err = Error::NotFound("vi-1234".into());
+        let json = error_json(&err);
+        assert!(json["suggestion"].is_string());
+        assert!(json["suggestion"].as_str().unwrap().contains("vima list"));
+    }
+
+    #[test]
+    fn suggestion_not_found() {
+        assert!(Error::NotFound("x".into())
+            .suggestion()
+            .contains("vima list --pluck id"));
+    }
+
+    #[test]
+    fn suggestion_no_vima_dir() {
+        assert!(Error::NoVimaDir.suggestion().contains("vima init"));
     }
 
     // ── Display trait tests ─────────────────────────────────────────────────
@@ -198,7 +273,10 @@ mod tests {
     #[test]
     fn display_cycle() {
         let err = Error::Cycle(vec!["a".into(), "b".into(), "c".into(), "a".into()]);
-        assert_eq!(err.to_string(), "dependency cycle detected: a -> b -> c -> a");
+        assert_eq!(
+            err.to_string(),
+            "dependency cycle detected: a -> b -> c -> a"
+        );
     }
 
     #[test]
@@ -233,7 +311,10 @@ mod tests {
 
     #[test]
     fn display_io_error() {
-        let err = Error::IoError(std::io::Error::new(std::io::ErrorKind::NotFound, "file missing"));
+        let err = Error::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "file missing",
+        ));
         assert_eq!(err.to_string(), "io error: file missing");
     }
 }
