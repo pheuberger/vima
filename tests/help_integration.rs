@@ -19,10 +19,12 @@ fn help_create_json_returns_create_schema() {
     assert!(output.status.success(), "exit code was {:?}", output.status);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .expect("stdout is not valid JSON");
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is not valid JSON");
 
-    assert_eq!(json["name"], "create", "should return the create command schema");
+    assert_eq!(
+        json["name"], "create",
+        "should return the create command schema"
+    );
     assert!(json["args"].is_array(), "create schema should have args");
 }
 
@@ -36,8 +38,7 @@ fn help_json_returns_full_schema() {
     assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .expect("stdout is not valid JSON");
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is not valid JSON");
 
     assert_eq!(json["name"], "vima");
     assert!(json["commands"].is_array());
@@ -53,8 +54,8 @@ fn help_brief_returns_compact_index() {
     assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: Vec<serde_json::Value> = serde_json::from_str(&stdout)
-        .expect("stdout is not valid JSON array");
+    let json: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("stdout is not valid JSON array");
 
     assert!(!json.is_empty());
     // Every entry should have name + about, nothing else

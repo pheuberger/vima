@@ -119,6 +119,7 @@ mod tests {
     fn make_ticket(id: &str, status: Status, priority: u8) -> Ticket {
         Ticket {
             id: id.to_string(),
+            version: None,
             title: format!("Ticket {}", id),
             status,
             ticket_type: TicketType::Task,

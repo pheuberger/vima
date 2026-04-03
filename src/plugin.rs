@@ -69,7 +69,7 @@ fn is_executable(path: &Path) -> bool {
         if let Ok(meta) = path.metadata() {
             return meta.permissions().mode() & 0o111 != 0;
         }
-        return false;
+        false
     }
     #[cfg(not(unix))]
     {

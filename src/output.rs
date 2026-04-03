@@ -155,13 +155,13 @@ pub fn pretty_list(tickets: &[Ticket]) -> Result<()> {
         .max("TYPE".len());
 
     // Header row (no color)
+    let title = "TITLE";
     println!(
-        "{:<id_w$}  {:<1}  {:<status_w$}  {:<type_w$}  {}",
+        "{:<id_w$}  {:<1}  {:<status_w$}  {:<type_w$}  {title}",
         "ID",
         "P",
         "STATUS",
         "TYPE",
-        "TITLE",
         id_w = id_w,
         status_w = status_w,
         type_w = type_w
@@ -276,6 +276,7 @@ mod tests {
     fn make_ticket() -> Ticket {
         Ticket {
             id: "t-1".to_string(),
+            version: None,
             title: "Test ticket".to_string(),
             status: Status::Open,
             ticket_type: TicketType::Task,
@@ -476,6 +477,7 @@ mod tests {
     fn make_full_ticket() -> Ticket {
         Ticket {
             id: "vi-abcd".to_string(),
+            version: None,
             title: "Implement full feature".to_string(),
             status: Status::InProgress,
             ticket_type: TicketType::Feature,

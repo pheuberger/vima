@@ -258,11 +258,8 @@ pub fn would_create_cycle(tickets: &[Ticket], from: &str, to: &str) -> Option<Ve
             // Collect the middle nodes, then reverse to get forward order.
             let mut middle: Vec<String> = Vec::new();
             let mut node = from.to_string();
-            loop {
-                let p = match parent.get(&node) {
-                    Some(p) => p.clone(),
-                    None => break,
-                };
+            while let Some(p) = parent.get(&node) {
+                let p = p.clone();
                 if p == from {
                     break;
                 }
@@ -418,6 +415,7 @@ mod tests {
     fn make_ticket(id: &str, deps: Vec<&str>, parent: Option<&str>) -> Ticket {
         Ticket {
             id: id.to_string(),
+            version: None,
             title: format!("Ticket {id}"),
             status: Status::Open,
             ticket_type: TicketType::Task,
@@ -1072,6 +1070,7 @@ mod tests {
     fn make_ticket_owned(id: &str, deps: &[String], parent: Option<&str>) -> Ticket {
         Ticket {
             id: id.to_string(),
+            version: None,
             title: format!("Ticket {id}"),
             status: Status::Open,
             ticket_type: TicketType::Task,

@@ -227,6 +227,7 @@ pub fn create_from_spec(
 
     let ticket = Ticket {
         id: ticket_id.clone(),
+        version: None,
         title,
         status: ticket::Status::Open,
         ticket_type,
@@ -257,7 +258,7 @@ fn batch_create_reader<R: BufRead>(store: &Store, reader: R, exact: bool) -> Res
     // Read at most 1001 raw lines to detect overflow
     let mut raw_lines: Vec<String> = Vec::new();
     for result in reader.lines().take(BATCH_MAX_LINES + 1) {
-        raw_lines.push(result.map_err(Error::IoError)?);
+        raw_lines.push(result.map_err(Error::Io)?);
     }
 
     if raw_lines.len() > BATCH_MAX_LINES {
@@ -285,9 +286,8 @@ fn batch_create_reader<R: BufRead>(store: &Store, reader: R, exact: bool) -> Res
         }
 
         // Parse JSON
-        let mut spec: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
-            wrap_batch_error(line_num, Error::YamlError(e.to_string()), &created_ids)
-        })?;
+        let mut spec: serde_json::Value = serde_json::from_str(trimmed)
+            .map_err(|e| wrap_batch_error(line_num, Error::Yaml(e.to_string()), &created_ids))?;
 
         // Resolve back-references in dep, blocks, parent
         for field in &["dep", "blocks", "parent"] {

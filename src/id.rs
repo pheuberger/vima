@@ -99,7 +99,7 @@ pub fn get_prefix(vima_root: &Path) -> Result<String> {
         .and_then(|n| n.to_str())
         .unwrap_or("vi");
 
-    let segments: Vec<&str> = dir_name.split(|c| c == '-' || c == '_').collect();
+    let segments: Vec<&str> = dir_name.split(['-', '_']).collect();
     let prefix = if segments.len() == 1 {
         segments[0]
             .chars()
