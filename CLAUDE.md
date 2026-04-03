@@ -35,7 +35,7 @@ vima is built for AI agents as the primary user. Every design decision optimizes
 
 - Default output should be JSON, parseable by `jq`
 - Add `--pluck` and `--count` support to any list-like command
-- Use semantic exit codes: 0=success, 1=general error, 2=cycle/blocked, 3=not found/ambiguous, 4=conflict (id_exists)
+- Use semantic exit codes: 0=success, 1=general error, 2=cycle/blocked, 3=not found/ambiguous, 4=conflict (id_exists), 5=stale (version conflict), 6=already claimed
 - Include the command in `help --json` schema automatically
 - Write error types in `error.rs` with structured fields, not just messages
 - Consider: "Can an agent use this without reading documentation first?"
@@ -69,13 +69,13 @@ CI runs: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.
 **Core modules**:
 - `cli.rs` — Clap derive-based argument parsing for all commands
 - `ticket.rs` — Data model: `Ticket`, `Note`, `Status`, `TicketType`, priority levels
-- `store.rs` — Persistence: reads/writes YAML+MD files, temp-file-then-rename for crash safety
+- `store.rs` — Persistence: reads/writes YAML+MD files, temp-file-then-rename for crash safety, optimistic concurrency via content-hash versioning
 - `id.rs` — ID generation (`{prefix}-{4char}`), fuzzy resolution, validation
 - `deps.rs` — Dependency graph: 3-color DFS cycle detection, tree building (dedup/full modes)
 - `filter.rs` — Filtering (tags OR, priority range, status, type, assignee) and sorting
 - `batch.rs` — Batch create from JSON with back-references (`$1`, `$2`, etc.)
 - `output.rs` — JSON formatting, `--pluck` field extraction, `--count`, `--pretty` colored output
-- `error.rs` — Structured error types with JSON serialization and semantic exit codes (0=ok, 1=general error, 2=cycle/blocked, 3=not found/ambiguous, 4=conflict)
+- `error.rs` — Structured error types with JSON serialization and semantic exit codes (0=ok, 1=general error, 2=cycle/blocked, 3=not found/ambiguous, 4=conflict, 5=stale, 6=already claimed)
 - `plugin.rs` — Discovers `vima-{name}` executables on PATH, passes context via env vars
 
 **Key patterns**:
@@ -104,3 +104,5 @@ Run `vima help --json` for the full command schema — it always reflects the in
 - `is-ready ID` exits 0 if ready, 2 if blocked — branch on exit code, don't parse
 - Batch create (`--batch`) supports `$1`, `$2` back-references for building dependency graphs atomically
 - Errors are JSON on stderr with `error`, `message`, and context fields
+- Tickets have a `version` field (content hash) — concurrent writes fail with exit 5 (stale). Re-read and retry.
+- `vima start ID --assignee NAME` claims a ticket. Fails with exit 6 if already claimed by a different assignee. Same assignee is idempotent.
