@@ -81,10 +81,7 @@ pub fn pluck_value(value: &serde_json::Value, fields: &str) -> serde_json::Value
 }
 
 pub fn output_plucked(values: &[serde_json::Value], fields: &str) {
-    let result: Vec<serde_json::Value> = values
-        .iter()
-        .map(|v| pluck_value(v, fields))
-        .collect();
+    let result: Vec<serde_json::Value> = values.iter().map(|v| pluck_value(v, fields)).collect();
     println!("{}", serde_json::Value::Array(result));
 }
 
@@ -242,19 +239,18 @@ pub fn pretty_show(ticket: &Ticket) -> Result<()> {
 // ── pretty_tree ──────────────────────────────────────────────────────────────
 
 pub fn pretty_tree(node: &TreeNode) {
-    println!(
-        "{} {} ({})",
-        node.id,
-        node.title,
-        node.status.as_str()
-    );
+    println!("{} {} ({})", node.id, node.title, node.status.as_str());
     print_tree_children(&node.deps, "");
 }
 
 fn print_tree_children(children: &[TreeNode], prefix: &str) {
     for (i, child) in children.iter().enumerate() {
         let is_last = i == children.len() - 1;
-        let connector = if is_last { "\u{2514}\u{2500}\u{2500} " } else { "\u{251c}\u{2500}\u{2500} " };
+        let connector = if is_last {
+            "\u{2514}\u{2500}\u{2500} "
+        } else {
+            "\u{251c}\u{2500}\u{2500} "
+        };
         println!(
             "{}{}{} {} ({})",
             prefix,
@@ -484,7 +480,11 @@ mod tests {
             status: Status::InProgress,
             ticket_type: TicketType::Feature,
             priority: 1,
-            tags: vec!["backend".to_string(), "api".to_string(), "urgent".to_string()],
+            tags: vec![
+                "backend".to_string(),
+                "api".to_string(),
+                "urgent".to_string(),
+            ],
             assignee: Some("alice".to_string()),
             estimate: Some(90),
             deps: vec!["vi-0001".to_string(), "vi-0002".to_string()],
@@ -555,19 +555,17 @@ mod tests {
                     id: "child-1".to_string(),
                     title: "Child 1".to_string(),
                     status: Status::InProgress,
-                    deps: vec![
-                        TreeNode {
-                            id: "gc-1".to_string(),
-                            title: "Grandchild 1".to_string(),
-                            status: Status::Open,
-                            deps: vec![TreeNode {
-                                id: "ggc-1".to_string(),
-                                title: "Great-grandchild 1".to_string(),
-                                status: Status::Closed,
-                                deps: vec![],
-                            }],
-                        },
-                    ],
+                    deps: vec![TreeNode {
+                        id: "gc-1".to_string(),
+                        title: "Grandchild 1".to_string(),
+                        status: Status::Open,
+                        deps: vec![TreeNode {
+                            id: "ggc-1".to_string(),
+                            title: "Great-grandchild 1".to_string(),
+                            status: Status::Closed,
+                            deps: vec![],
+                        }],
+                    }],
                 },
                 TreeNode {
                     id: "child-2".to_string(),
@@ -628,7 +626,11 @@ mod tests {
     fn pretty_show_deps_and_blocks_populated() {
         colored::control::set_override(true);
         let mut ticket = make_ticket();
-        ticket.deps = vec!["vi-dep1".to_string(), "vi-dep2".to_string(), "vi-dep3".to_string()];
+        ticket.deps = vec![
+            "vi-dep1".to_string(),
+            "vi-dep2".to_string(),
+            "vi-dep3".to_string(),
+        ];
         ticket.blocks = vec!["vi-blk1".to_string(), "vi-blk2".to_string()];
         let result = pretty_show(&ticket);
         assert!(result.is_ok());
@@ -723,9 +725,8 @@ mod tests {
     fn pretty_show_multiline_description() {
         colored::control::set_override(true);
         let mut ticket = make_ticket();
-        ticket.description = Some(
-            "Line one\nLine two\nLine three\n\nLine five after blank".to_string(),
-        );
+        ticket.description =
+            Some("Line one\nLine two\nLine three\n\nLine five after blank".to_string());
         let result = pretty_show(&ticket);
         assert!(result.is_ok());
         colored::control::set_override(false);

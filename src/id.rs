@@ -5,8 +5,8 @@ use nanoid::nanoid;
 use crate::error::{Error, Result};
 
 const ALPHANUMERIC: [char; 36] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h',
-    'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
+    'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
 ];
 
 pub fn validate_id(id: &str) -> Result<()> {
@@ -16,7 +16,10 @@ pub fn validate_id(id: &str) -> Result<()> {
     if id.starts_with('.') {
         return Err(Error::InvalidField("id must not start with '.'".into()));
     }
-    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') {
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    {
         return Err(Error::InvalidField(
             "id may only contain alphanumeric characters, '.', '_', or '-'".into(),
         ));
@@ -62,7 +65,10 @@ pub fn resolve_id(dir: &Path, input: &str, exact: bool) -> Result<String> {
         }
     }
 
-    matches.into_iter().next().ok_or_else(|| Error::NotFound(input.to_string()))
+    matches
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::NotFound(input.to_string()))
 }
 
 pub fn get_prefix(vima_root: &Path) -> Result<String> {
@@ -95,7 +101,11 @@ pub fn get_prefix(vima_root: &Path) -> Result<String> {
 
     let segments: Vec<&str> = dir_name.split(|c| c == '-' || c == '_').collect();
     let prefix = if segments.len() == 1 {
-        segments[0].chars().take(2).collect::<String>().to_lowercase()
+        segments[0]
+            .chars()
+            .take(2)
+            .collect::<String>()
+            .to_lowercase()
     } else {
         segments
             .iter()
@@ -300,7 +310,9 @@ mod tests {
         assert!(id.starts_with("vm-"));
         let suffix = &id["vm-".len()..];
         assert_eq!(suffix.len(), 4);
-        assert!(suffix.chars().all(|c| c.is_ascii_alphanumeric() && (c.is_ascii_digit() || c.is_ascii_lowercase())));
+        assert!(suffix
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() && (c.is_ascii_digit() || c.is_ascii_lowercase())));
     }
 
     #[test]
@@ -451,7 +463,11 @@ mod tests {
         let dir = make_tmp_dir("generate-id-validates");
         for _ in 0..20 {
             let id = generate_id("vm", &dir).unwrap();
-            assert!(validate_id(&id).is_ok(), "generated id '{}' failed validation", id);
+            assert!(
+                validate_id(&id).is_ok(),
+                "generated id '{}' failed validation",
+                id
+            );
         }
     }
 

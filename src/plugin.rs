@@ -118,7 +118,10 @@ mod tests {
         unsafe { env::set_var("PATH", &original_path) };
 
         let found = plugins.iter().find(|(name, _)| name == "testplugin");
-        assert!(found.is_some(), "should find vima-testplugin as 'testplugin'");
+        assert!(
+            found.is_some(),
+            "should find vima-testplugin as 'testplugin'"
+        );
         assert_eq!(found.unwrap().1.as_deref(), Some("A test plugin"));
     }
 
@@ -200,7 +203,10 @@ mod tests {
 
         unsafe { env::set_var("PATH", &original_path) };
 
-        let found: Vec<_> = plugins.iter().filter(|(name, _)| name == "myplugin").collect();
+        let found: Vec<_> = plugins
+            .iter()
+            .filter(|(name, _)| name == "myplugin")
+            .collect();
         assert_eq!(found.len(), 1, "should deduplicate across PATH dirs");
     }
 
@@ -278,7 +284,11 @@ mod tests {
             .filter(|(n, _)| n == "my-plugin" || n == "my_plugin" || n == "a-b-c")
             .map(|(n, _)| n.as_str())
             .collect();
-        assert_eq!(names.len(), 3, "should find all three specially-named plugins");
+        assert_eq!(
+            names.len(),
+            3,
+            "should find all three specially-named plugins"
+        );
         // They should be sorted
         assert_eq!(names, vec!["a-b-c", "my-plugin", "my_plugin"]);
     }
@@ -290,7 +300,10 @@ mod tests {
         std::fs::write(&path, "#!/bin/sh\necho hello\n# just a comment\n").unwrap();
 
         let desc = read_plugin_description(&path);
-        assert!(desc.is_none(), "should return None when no description marker is present");
+        assert!(
+            desc.is_none(),
+            "should return None when no description marker is present"
+        );
     }
 
     #[test]
@@ -348,8 +361,7 @@ mod tests {
 
         // Create a symlink to the same plugin in tmp_link_dir
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&plugin_path, tmp_link_dir.path().join("vima-symtest"))
-            .unwrap();
+        std::os::unix::fs::symlink(&plugin_path, tmp_link_dir.path().join("vima-symtest")).unwrap();
 
         let original_path = env::var("PATH").unwrap_or_default();
         let new_path = format!(
@@ -364,8 +376,15 @@ mod tests {
 
         unsafe { env::set_var("PATH", &original_path) };
 
-        let found: Vec<_> = plugins.iter().filter(|(name, _)| name == "symtest").collect();
-        assert_eq!(found.len(), 1, "symlinked duplicates should be deduplicated");
+        let found: Vec<_> = plugins
+            .iter()
+            .filter(|(name, _)| name == "symtest")
+            .collect();
+        assert_eq!(
+            found.len(),
+            1,
+            "symlinked duplicates should be deduplicated"
+        );
         assert_eq!(found[0].1.as_deref(), Some("Sym test plugin"));
     }
 
@@ -406,6 +425,9 @@ mod tests {
         unsafe { env::set_var("PATH", &original_path) };
 
         let found = plugins.iter().find(|(name, _)| name.is_empty());
-        assert!(found.is_none(), "vima- with empty command name should be skipped");
+        assert!(
+            found.is_none(),
+            "vima- with empty command name should be skipped"
+        );
     }
 }

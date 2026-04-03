@@ -1,6 +1,6 @@
-use std::fmt;
-use serde::{Deserialize, Serialize};
 use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -364,8 +364,14 @@ mod tests {
             design: Some("Design notes here".to_string()),
             acceptance: Some("All tests pass".to_string()),
             notes: vec![
-                Note { timestamp: "2026-02-01T00:00:00Z".to_string(), text: "note 1".to_string() },
-                Note { timestamp: "2026-03-01T00:00:00Z".to_string(), text: "note 2".to_string() },
+                Note {
+                    timestamp: "2026-02-01T00:00:00Z".to_string(),
+                    text: "note 1".to_string(),
+                },
+                Note {
+                    timestamp: "2026-03-01T00:00:00Z".to_string(),
+                    text: "note 2".to_string(),
+                },
             ],
             body: Some("body content".to_string()),
             blocks: vec!["b1".to_string()],
@@ -379,7 +385,10 @@ mod tests {
         assert_eq!(deserialized.assignee.as_deref(), Some("carol"));
         assert_eq!(deserialized.estimate, Some(240));
         assert_eq!(deserialized.parent.as_deref(), Some("parent-1"));
-        assert_eq!(deserialized.description.as_deref(), Some("A full description"));
+        assert_eq!(
+            deserialized.description.as_deref(),
+            Some("A full description")
+        );
         assert_eq!(deserialized.design.as_deref(), Some("Design notes here"));
         assert_eq!(deserialized.acceptance.as_deref(), Some("All tests pass"));
         assert_eq!(deserialized.notes.len(), 2);

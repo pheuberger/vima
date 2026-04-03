@@ -14,8 +14,8 @@ const BATCH_MAX_LINES: usize = 1000;
 const BATCH_MAX_LINE_BYTES: usize = 1024 * 1024; // 1 MB
 
 const ALPHANUMERIC: [char; 36] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h',
-    'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
+    'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
 ];
 
 /// Resolve a single back-reference value.
@@ -84,11 +84,7 @@ fn get_string_array(spec: &serde_json::Value, field: &str) -> Vec<String> {
     }
 }
 
-fn generate_batch_id(
-    prefix: &str,
-    tickets_dir: &Path,
-    created_ids: &[String],
-) -> Result<String> {
+fn generate_batch_id(prefix: &str, tickets_dir: &Path, created_ids: &[String]) -> Result<String> {
     for _ in 0..10 {
         let suffix = nanoid!(4, &ALPHANUMERIC);
         let id = format!("{prefix}-{suffix}");
@@ -106,7 +102,11 @@ fn wrap_batch_error(line_num: usize, inner: Error, created_ids: &[String]) -> Er
     if created_ids.is_empty() {
         Error::InvalidField(base)
     } else {
-        Error::InvalidField(format!("{}; already created: [{}]", base, created_ids.join(", ")))
+        Error::InvalidField(format!(
+            "{}; already created: [{}]",
+            base,
+            created_ids.join(", ")
+        ))
     }
 }
 
@@ -129,7 +129,8 @@ pub fn create_from_spec(
     let priority = if let Some(p) = spec.get("priority") {
         let p = p
             .as_u64()
-            .ok_or_else(|| Error::InvalidField("priority must be a number".into()))? as u8;
+            .ok_or_else(|| Error::InvalidField("priority must be a number".into()))?
+            as u8;
         if p > filter::MAX_PRIORITY {
             return Err(Error::InvalidField(format!(
                 "priority must be 0-{}",
@@ -284,10 +285,9 @@ fn batch_create_reader<R: BufRead>(store: &Store, reader: R, exact: bool) -> Res
         }
 
         // Parse JSON
-        let mut spec: serde_json::Value =
-            serde_json::from_str(trimmed).map_err(|e| {
-                wrap_batch_error(line_num, Error::YamlError(e.to_string()), &created_ids)
-            })?;
+        let mut spec: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
+            wrap_batch_error(line_num, Error::YamlError(e.to_string()), &created_ids)
+        })?;
 
         // Resolve back-references in dep, blocks, parent
         for field in &["dep", "blocks", "parent"] {
@@ -518,7 +518,10 @@ mod tests {
         assert!(msg.contains("line 2"), "expected line 2 in error: {msg}");
         // The cycle error is wrapped in InvalidField
         assert!(matches!(err, Error::InvalidField(_)));
-        assert!(msg.contains("cycle") || msg.contains("already created"), "unexpected: {msg}");
+        assert!(
+            msg.contains("cycle") || msg.contains("already created"),
+            "unexpected: {msg}"
+        );
 
         // Both t1 and t2 are persisted on disk even though blocks processing failed.
         // The error message must list both IDs so the user knows what to clean up.
@@ -554,7 +557,11 @@ mod tests {
 {"no_title_field": true}
 "#;
         let err = run_batch(&store, input).unwrap_err();
-        assert!(err.to_string().contains("line 2"), "expected line 2 in error: {}", err);
+        assert!(
+            err.to_string().contains("line 2"),
+            "expected line 2 in error: {}",
+            err
+        );
 
         // First ticket must still exist on disk
         let ticket = store.read_ticket("persisted").unwrap();
@@ -565,7 +572,8 @@ mod tests {
     #[serial(env)]
     fn batch_empty_lines_skipped() {
         let (_tmp, store) = setup_store();
-        let input = "\n{\"title\": \"A\", \"id\": \"a1\"}\n\n{\"title\": \"B\", \"id\": \"b1\"}\n\n";
+        let input =
+            "\n{\"title\": \"A\", \"id\": \"a1\"}\n\n{\"title\": \"B\", \"id\": \"b1\"}\n\n";
         let tickets = run_batch(&store, input).unwrap();
         assert_eq!(tickets.len(), 2);
     }
@@ -580,7 +588,10 @@ mod tests {
         let err = run_batch(&store, input).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("line 2"), "expected line 2: {msg}");
-        assert!(msg.contains("already created") || msg.contains("dup"), "unexpected: {msg}");
+        assert!(
+            msg.contains("already created") || msg.contains("dup"),
+            "unexpected: {msg}"
+        );
     }
 
     #[test]
@@ -659,7 +670,10 @@ mod tests {
     fn batch_only_blank_lines_returns_empty_vec() {
         let (_tmp, store) = setup_store();
         let tickets = run_batch(&store, "\n\n  \n\n").unwrap();
-        assert!(tickets.is_empty(), "expected empty result for blank-only input");
+        assert!(
+            tickets.is_empty(),
+            "expected empty result for blank-only input"
+        );
     }
 
     #[test]
@@ -709,10 +723,7 @@ not valid json
         let input = "{\"title\": \"Bad prio\", \"id\": \"bp1\", \"priority\": 99}\n";
         let err = run_batch(&store, input).unwrap_err();
         let msg = err.to_string();
-        assert!(
-            msg.contains("priority"),
-            "expected priority error: {msg}"
-        );
+        assert!(msg.contains("priority"), "expected priority error: {msg}");
     }
 
     #[test]
@@ -728,5 +739,4 @@ not valid json
             "expected title error for non-object: {msg}"
         );
     }
-
 }

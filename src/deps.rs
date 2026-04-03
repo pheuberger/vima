@@ -17,8 +17,7 @@ pub struct TreeNode {
 /// In dedup mode (full=false): each node appears once at its deepest position.
 /// In full mode (full=true): nodes may repeat, but cycles are still marked.
 pub fn build_dep_tree(tickets: &[Ticket], root_id: &str, full: bool) -> Result<TreeNode> {
-    let ticket_map: HashMap<&str, &Ticket> =
-        tickets.iter().map(|t| (t.id.as_str(), t)).collect();
+    let ticket_map: HashMap<&str, &Ticket> = tickets.iter().map(|t| (t.id.as_str(), t)).collect();
 
     if !ticket_map.contains_key(root_id) {
         return Err(Error::NotFound(root_id.to_string()));
@@ -30,7 +29,12 @@ pub fn build_dep_tree(tickets: &[Ticket], root_id: &str, full: bool) -> Result<T
         .collect();
 
     if full {
-        Ok(build_full_subtree(&ticket_map, &dep_map, root_id, &mut HashSet::new()))
+        Ok(build_full_subtree(
+            &ticket_map,
+            &dep_map,
+            root_id,
+            &mut HashSet::new(),
+        ))
     } else {
         let mut max_depth: HashMap<String, usize> = HashMap::new();
         dfs_max_depth(&dep_map, root_id, 0, &mut HashSet::new(), &mut max_depth);
@@ -181,7 +185,15 @@ fn build_dedup_subtree(
     let deps: Vec<TreeNode> = dep_order
         .iter()
         .map(|(dep_id, _)| {
-            build_dedup_subtree(ticket_map, dep_map, dep_id, target_child_depth, path, max_depth, claimed)
+            build_dedup_subtree(
+                ticket_map,
+                dep_map,
+                dep_id,
+                target_child_depth,
+                path,
+                max_depth,
+                claimed,
+            )
         })
         .collect();
     path.remove(id);
@@ -321,10 +333,7 @@ pub fn detect_all_cycles(tickets: &[Ticket]) -> Vec<Vec<String>> {
     }
 
     // Normalize and deduplicate
-    let mut normalized: Vec<Vec<String>> = raw_cycles
-        .into_iter()
-        .map(normalize_cycle)
-        .collect();
+    let mut normalized: Vec<Vec<String>> = raw_cycles.into_iter().map(normalize_cycle).collect();
 
     normalized.sort();
     normalized.dedup();
@@ -683,7 +692,11 @@ mod tests {
             make_ticket("B", vec!["A"], None),
         ];
         let cycles = detect_all_cycles(&tickets);
-        assert_eq!(cycles.len(), 1, "same cycle found from different starts should be deduped");
+        assert_eq!(
+            cycles.len(),
+            1,
+            "same cycle found from different starts should be deduped"
+        );
         assert_eq!(cycles[0], vec!["A", "B"]);
     }
 
@@ -698,7 +711,11 @@ mod tests {
         compute_reverse_fields(&mut tickets);
         for t in &tickets {
             assert!(t.blocks.is_empty(), "ticket {} should have no blocks", t.id);
-            assert!(t.children.is_empty(), "ticket {} should have no children", t.id);
+            assert!(
+                t.children.is_empty(),
+                "ticket {} should have no children",
+                t.id
+            );
         }
     }
 
@@ -788,7 +805,10 @@ mod tests {
         assert!(first.blocks.is_empty());
 
         // Last ticket is blocked by the second-to-last
-        let last = tickets.iter().find(|t| t.id == format!("T-{:04}", n - 1)).unwrap();
+        let last = tickets
+            .iter()
+            .find(|t| t.id == format!("T-{:04}", n - 1))
+            .unwrap();
         assert_eq!(last.blocks, vec![format!("T-{:04}", n - 2)]);
     }
 
@@ -813,7 +833,10 @@ mod tests {
         let mut sorted_ids = child_ids.clone();
         sorted_ids.sort();
         let tree_child_ids: Vec<&str> = tree.deps.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(tree_child_ids, sorted_ids.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        assert_eq!(
+            tree_child_ids,
+            sorted_ids.iter().map(|s| s.as_str()).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -834,7 +857,12 @@ mod tests {
         // Each child should have ROOT in its blocks list
         for cid in &child_ids {
             let child = tickets.iter().find(|t| t.id == *cid).unwrap();
-            assert_eq!(child.blocks, vec!["ROOT"], "child {} should be blocked by ROOT", cid);
+            assert_eq!(
+                child.blocks,
+                vec!["ROOT"],
+                "child {} should be blocked by ROOT",
+                cid
+            );
         }
     }
 
@@ -852,7 +880,11 @@ mod tests {
             let here = if node.id == target { 1 } else { 0 };
             here + node.deps.iter().map(|c| count_id(c, target)).sum::<usize>()
         }
-        assert_eq!(count_id(&tree, "D"), 1, "D should appear exactly once in dedup mode");
+        assert_eq!(
+            count_id(&tree, "D"),
+            1,
+            "D should appear exactly once in dedup mode"
+        );
     }
 
     #[test]
@@ -869,7 +901,11 @@ mod tests {
             let here = if node.id == target { 1 } else { 0 };
             here + node.deps.iter().map(|c| count_id(c, target)).sum::<usize>()
         }
-        assert_eq!(count_id(&tree, "D"), 2, "D should appear twice in full mode");
+        assert_eq!(
+            count_id(&tree, "D"),
+            2,
+            "D should appear twice in full mode"
+        );
     }
 
     #[test]
@@ -879,7 +915,11 @@ mod tests {
         let tree = build_dep_tree(&tickets, "A", false).unwrap();
         assert_eq!(tree.deps.len(), 3);
         for child in &tree.deps {
-            assert!(child.title.contains("[missing]"), "missing dep {} not marked", child.id);
+            assert!(
+                child.title.contains("[missing]"),
+                "missing dep {} not marked",
+                child.id
+            );
         }
     }
 
@@ -927,15 +967,31 @@ mod tests {
 
         // Full mode: shared leaves appear multiple times
         let full_tree = build_dep_tree(&tickets, "A", true).unwrap();
-        assert_eq!(count_id(&full_tree, "F"), 2, "F shared by B and C in full mode");
-        assert_eq!(count_id(&full_tree, "G"), 2, "G shared by C and D in full mode");
+        assert_eq!(
+            count_id(&full_tree, "F"),
+            2,
+            "F shared by B and C in full mode"
+        );
+        assert_eq!(
+            count_id(&full_tree, "G"),
+            2,
+            "G shared by C and D in full mode"
+        );
         assert_eq!(count_id(&full_tree, "E"), 1);
         assert_eq!(count_id(&full_tree, "H"), 1);
 
         // Dedup mode: each leaf appears once
         let dedup_tree = build_dep_tree(&tickets, "A", false).unwrap();
-        assert_eq!(count_id(&dedup_tree, "F"), 1, "F should appear once in dedup mode");
-        assert_eq!(count_id(&dedup_tree, "G"), 1, "G should appear once in dedup mode");
+        assert_eq!(
+            count_id(&dedup_tree, "F"),
+            1,
+            "F should appear once in dedup mode"
+        );
+        assert_eq!(
+            count_id(&dedup_tree, "G"),
+            1,
+            "G should appear once in dedup mode"
+        );
     }
 
     #[test]
@@ -946,9 +1002,7 @@ mod tests {
         let mut root_deps: Vec<String> = Vec::new();
 
         for branch in 0..10 {
-            let chain: Vec<String> = (0..10)
-                .map(|depth| format!("B{branch}-D{depth}"))
-                .collect();
+            let chain: Vec<String> = (0..10).map(|depth| format!("B{branch}-D{depth}")).collect();
             root_deps.push(chain[0].clone());
 
             for (i, id) in chain.iter().enumerate() {
@@ -976,7 +1030,11 @@ mod tests {
                 node = &node.deps[0];
                 depth += 1;
             }
-            assert_eq!(depth, 9, "branch {} should be 9 levels deep", branch_root.id);
+            assert_eq!(
+                depth, 9,
+                "branch {} should be 9 levels deep",
+                branch_root.id
+            );
         }
 
         // No cycles

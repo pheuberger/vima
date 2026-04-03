@@ -23,12 +23,23 @@ pub(crate) fn needs_quoting(s: &str) -> bool {
     if "-*&!|>%@`,[]{}#?'\"".contains(first) {
         return true;
     }
-    if s.contains(':') || s.contains('#') || s.contains('\n') || s.contains('"') || s.contains('\'') || s.contains(',') || s.contains(']') || s.contains('[') {
+    if s.contains(':')
+        || s.contains('#')
+        || s.contains('\n')
+        || s.contains('"')
+        || s.contains('\'')
+        || s.contains(',')
+        || s.contains(']')
+        || s.contains('[')
+    {
         return true;
     }
     if s.len() <= 5 {
         let lower = s.to_lowercase();
-        if matches!(lower.as_str(), "true" | "false" | "null" | "yes" | "no" | "on" | "off") {
+        if matches!(
+            lower.as_str(),
+            "true" | "false" | "null" | "yes" | "no" | "on" | "off"
+        ) {
             return true;
         }
     }
@@ -68,7 +79,10 @@ pub(crate) fn write_yaml_notes(out: &mut String, notes: &[Note]) {
     }
     out.push_str("notes:\n");
     for note in notes {
-        out.push_str(&format!("  - timestamp: {}\n", yaml_scalar(&note.timestamp)));
+        out.push_str(&format!(
+            "  - timestamp: {}\n",
+            yaml_scalar(&note.timestamp)
+        ));
         if note.text.contains('\n') {
             out.push_str("    text: |-\n");
             for line in note.text.lines() {
@@ -159,12 +173,7 @@ impl Store {
                 Ok(ticket) => tickets.push(ticket),
                 Err(e) => {
                     use std::io::Write;
-                    let _ = writeln!(
-                        std::io::stderr(),
-                        "warning: skipping {}: {}",
-                        name,
-                        e
-                    );
+                    let _ = writeln!(std::io::stderr(), "warning: skipping {}: {}", name, e);
                 }
             }
         }
@@ -206,7 +215,10 @@ impl Store {
             None => out.push_str("parent: null\n"),
         }
 
-        out.push_str(&format!("created: {}\n", yaml_scalar(&strip(&ticket.created))));
+        out.push_str(&format!(
+            "created: {}\n",
+            yaml_scalar(&strip(&ticket.created))
+        ));
 
         for (key, val) in &[
             ("description", &ticket.description),
@@ -406,7 +418,11 @@ This is the **markdown** body.
     fn read_all_skips_unparseable_files() {
         let (_tmp, store, tickets_dir) = make_store();
         fs::write(tickets_dir.join("good.md"), VALID_TICKET).unwrap();
-        fs::write(tickets_dir.join("bad.md"), "not frontmatter at all\njust text").unwrap();
+        fs::write(
+            tickets_dir.join("bad.md"),
+            "not frontmatter at all\njust text",
+        )
+        .unwrap();
         let tickets = store.read_all().unwrap();
         assert_eq!(tickets.len(), 1);
         assert_eq!(tickets[0].id, "test-abc");
@@ -771,7 +787,10 @@ parent: blocker
         assert_eq!(read_back.notes[1].timestamp, "2026-04-02T09:30:00Z");
         assert_eq!(read_back.notes[1].text, "Second note with special: chars");
         assert_eq!(read_back.notes[2].timestamp, "2026-04-02T10:00:00Z");
-        assert_eq!(read_back.notes[2].text, "Multi-line note\nwith second line\nand third");
+        assert_eq!(
+            read_back.notes[2].text,
+            "Multi-line note\nwith second line\nand third"
+        );
     }
 
     #[test]
@@ -830,12 +849,10 @@ parent: blocker
     fn round_trip_all_optional_fields() {
         let (_tmp, store, _tickets_dir) = make_store();
         let mut ticket = make_minimal_ticket("rt-af01");
-        ticket.notes = vec![
-            Note {
-                timestamp: "2026-04-02T12:00:00Z".to_string(),
-                text: "progress update".to_string(),
-            },
-        ];
+        ticket.notes = vec![Note {
+            timestamp: "2026-04-02T12:00:00Z".to_string(),
+            text: "progress update".to_string(),
+        }];
         ticket.links = vec!["https://design.example.com".to_string()];
         ticket.parent = Some("rt-epic2".to_string());
         ticket.assignee = Some("bob".to_string());
@@ -856,11 +873,17 @@ parent: blocker
         assert_eq!(read_back.parent, Some("rt-epic2".to_string()));
         assert_eq!(read_back.assignee, Some("bob".to_string()));
         assert_eq!(read_back.estimate, Some(120));
-        assert_eq!(read_back.description, Some("A detailed description".to_string()));
+        assert_eq!(
+            read_back.description,
+            Some("A detailed description".to_string())
+        );
         assert_eq!(read_back.design, Some("Design doc".to_string()));
         assert_eq!(read_back.acceptance, Some("Must pass CI".to_string()));
         assert_eq!(read_back.tags, vec!["backend", "urgent"]);
-        assert_eq!(read_back.body, Some("Extended body content here.".to_string()));
+        assert_eq!(
+            read_back.body,
+            Some("Extended body content here.".to_string())
+        );
     }
 
     #[test]
@@ -995,11 +1018,7 @@ created: "2026-04-02T00:00:00Z"
             "---\nid: [broken yaml\n---\n",
         )
         .unwrap();
-        fs::write(
-            tickets_dir.join("bad-cccc.md"),
-            "---\nid: bad-cccc\n---\n",
-        )
-        .unwrap();
+        fs::write(tickets_dir.join("bad-cccc.md"), "---\nid: bad-cccc\n---\n").unwrap();
         fs::write(
             tickets_dir.join("bad-dddd.md"),
             "Just plain text, no frontmatter.\n",

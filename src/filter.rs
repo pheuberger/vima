@@ -42,7 +42,11 @@ impl Filter {
     }
 
     pub fn from_args(args: &FilterArgs) -> Result<Filter, Error> {
-        let priority_range = args.priority.as_deref().map(parse_priority_range).transpose()?;
+        let priority_range = args
+            .priority
+            .as_deref()
+            .map(parse_priority_range)
+            .transpose()?;
         Ok(Filter {
             status: args.status.clone(),
             tags: args.tag.clone(),
@@ -96,7 +100,10 @@ pub fn parse_priority_range(s: &str) -> Result<(u8, u8), Error> {
 }
 
 pub fn apply_filters(tickets: Vec<Ticket>, filter: &Filter) -> Vec<Ticket> {
-    let mut result = tickets.into_iter().filter(|t| filter.matches(t)).collect::<Vec<_>>();
+    let mut result = tickets
+        .into_iter()
+        .filter(|t| filter.matches(t))
+        .collect::<Vec<_>>();
     result.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
     if let Some(limit) = filter.limit {
         result.truncate(limit);
