@@ -6,7 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 vima is a file-based, agent-first ticket tracker. Tickets are Markdown files with YAML frontmatter stored in `.vima/tickets/`. All output is newline-delimited JSON. Written in Rust.
 
-This project uses vima itself for tracking its own work — check `.vima/tickets/` for open issues.
+This project uses vima itself as its **only** ticket tracker — all work is tracked exclusively via the `vima` CLI (available on PATH). Do not use any other issue-tracking system. Always use `vima` commands to create, list, update, and close tickets. **Never read or write `.vima/tickets/` files directly** — use the CLI for everything.
+
+## Commit conventions
+
+Use **semantic commit messages**: `type: short description`. Common prefixes: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`.
+
+## Testing policy
+
+**Every code change MUST include tests.** No exceptions. New features, bug fixes, refactors — all require corresponding test coverage. Do not submit code without tests. Run `cargo test` to verify all tests pass before considering work complete.
 
 ## Build & development commands
 
