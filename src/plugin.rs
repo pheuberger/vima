@@ -240,4 +240,172 @@ mod tests {
 
     #[cfg(not(unix))]
     fn make_executable(_path: &std::path::Path) {}
+
+    #[test]
+    #[serial(env)]
+    fn discover_plugins_empty_path_returns_empty() {
+        let original_path = env::var("PATH").unwrap_or_default();
+        unsafe { env::set_var("PATH", "") };
+
+        let plugins = discover_plugins();
+
+        unsafe { env::set_var("PATH", &original_path) };
+
+        assert!(plugins.is_empty(), "empty PATH should yield no plugins");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn discover_plugins_names_with_special_characters() {
+        let tmp = tempdir().unwrap();
+        // Plugins with dashes and underscores in their names
+        for name in ["vima-my-plugin", "vima-my_plugin", "vima-a-b-c"] {
+            let p = tmp.path().join(name);
+            std::fs::write(&p, "#!/bin/sh\necho hi\n").unwrap();
+            make_executable(&p);
+        }
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{}", tmp.path().display(), original_path);
+        unsafe { env::set_var("PATH", &new_path) };
+
+        let plugins = discover_plugins();
+
+        unsafe { env::set_var("PATH", &original_path) };
+
+        let names: Vec<&str> = plugins
+            .iter()
+            .filter(|(n, _)| n == "my-plugin" || n == "my_plugin" || n == "a-b-c")
+            .map(|(n, _)| n.as_str())
+            .collect();
+        assert_eq!(names.len(), 3, "should find all three specially-named plugins");
+        // They should be sorted
+        assert_eq!(names, vec!["a-b-c", "my-plugin", "my_plugin"]);
+    }
+
+    #[test]
+    fn read_description_no_description_line() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("vima-nodesc");
+        std::fs::write(&path, "#!/bin/sh\necho hello\n# just a comment\n").unwrap();
+
+        let desc = read_plugin_description(&path);
+        assert!(desc.is_none(), "should return None when no description marker is present");
+    }
+
+    #[test]
+    fn read_description_uses_first_match_only() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("vima-multidesc");
+        let content = "#!/bin/sh\n# vima-plugin: First description\n# vima-plugin: Second description\necho hello\n";
+        std::fs::write(&path, content).unwrap();
+
+        let desc = read_plugin_description(&path);
+        assert_eq!(
+            desc.as_deref(),
+            Some("First description"),
+            "should return only the first description line"
+        );
+    }
+
+    #[test]
+    fn read_description_trims_whitespace() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("vima-trimmed");
+        std::fs::write(&path, "#!/bin/sh\n# vima-plugin:   padded description   \n").unwrap();
+
+        let desc = read_plugin_description(&path);
+        assert_eq!(
+            desc.as_deref(),
+            Some("padded description"),
+            "description should be trimmed"
+        );
+    }
+
+    #[test]
+    fn read_description_empty_file() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("vima-empty");
+        std::fs::write(&path, "").unwrap();
+
+        let desc = read_plugin_description(&path);
+        assert!(desc.is_none(), "empty file should return None");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn discover_plugins_deduplicates_symlinks() {
+        let tmp_real = tempdir().unwrap();
+        let tmp_link_dir = tempdir().unwrap();
+
+        // Create an executable plugin in tmp_real
+        let plugin_path = tmp_real.path().join("vima-symtest");
+        let mut f = std::fs::File::create(&plugin_path).unwrap();
+        writeln!(f, "#!/bin/sh").unwrap();
+        writeln!(f, "# vima-plugin: Sym test plugin").unwrap();
+        drop(f);
+        make_executable(&plugin_path);
+
+        // Create a symlink to the same plugin in tmp_link_dir
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&plugin_path, tmp_link_dir.path().join("vima-symtest"))
+            .unwrap();
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let new_path = format!(
+            "{}:{}:{}",
+            tmp_real.path().display(),
+            tmp_link_dir.path().display(),
+            original_path
+        );
+        unsafe { env::set_var("PATH", &new_path) };
+
+        let plugins = discover_plugins();
+
+        unsafe { env::set_var("PATH", &original_path) };
+
+        let found: Vec<_> = plugins.iter().filter(|(name, _)| name == "symtest").collect();
+        assert_eq!(found.len(), 1, "symlinked duplicates should be deduplicated");
+        assert_eq!(found[0].1.as_deref(), Some("Sym test plugin"));
+    }
+
+    #[test]
+    fn read_description_marker_after_line_10_is_ignored() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("vima-late");
+        // Put 10 filler lines before the description marker (marker on line 11)
+        let mut content = String::new();
+        for i in 0..10 {
+            content.push_str(&format!("# line {}\n", i));
+        }
+        content.push_str("# vima-plugin: Too late\n");
+        std::fs::write(&path, &content).unwrap();
+
+        let desc = read_plugin_description(&path);
+        assert!(
+            desc.is_none(),
+            "description marker past the first 10 lines should be ignored"
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn discover_plugins_skips_bare_vima_dash_name() {
+        // A file named exactly "vima-" (empty command) should be skipped
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("vima-");
+        std::fs::write(&p, "#!/bin/sh\n").unwrap();
+        make_executable(&p);
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{}", tmp.path().display(), original_path);
+        unsafe { env::set_var("PATH", &new_path) };
+
+        let plugins = discover_plugins();
+
+        unsafe { env::set_var("PATH", &original_path) };
+
+        let found = plugins.iter().find(|(name, _)| name.is_empty());
+        assert!(found.is_none(), "vima- with empty command name should be skipped");
+    }
 }

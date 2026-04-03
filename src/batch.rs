@@ -594,4 +594,139 @@ mod tests {
         assert_eq!(tickets.len(), 2);
         assert_ne!(tickets[0].id, tickets[1].id);
     }
+
+    // ── error-path tests ─────────────────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn batch_malformed_json_returns_error() {
+        let (_tmp, store) = setup_store();
+        let input = "this is not json at all\n";
+        let err = run_batch(&store, input).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("line 1"), "expected line 1 in error: {msg}");
+        assert!(matches!(err, Error::InvalidField(_)));
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_truncated_json_returns_error() {
+        let (_tmp, store) = setup_store();
+        // Missing closing brace — valid start but truncated
+        let input = "{\"title\": \"incomplete\n";
+        let err = run_batch(&store, input).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("line 1"), "expected line 1 in error: {msg}");
+        assert!(matches!(err, Error::InvalidField(_)));
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_missing_title_returns_error() {
+        let (_tmp, store) = setup_store();
+        let input = "{\"priority\": 1, \"id\": \"no-title\"}\n";
+        let err = run_batch(&store, input).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("title is required"),
+            "expected 'title is required' in: {msg}"
+        );
+        assert!(msg.contains("line 1"), "expected line 1 in error: {msg}");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_line_exceeds_max_bytes_returns_error() {
+        let (_tmp, store) = setup_store();
+        // Create a single line that exceeds BATCH_MAX_LINE_BYTES (1 MB)
+        let huge_value = "x".repeat(BATCH_MAX_LINE_BYTES + 1);
+        let input = format!("{{\"title\": \"{}\"}}\n", huge_value);
+        let err = run_batch(&store, &input).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("1MB limit"), "expected '1MB limit' in: {msg}");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_empty_input_returns_empty_vec() {
+        let (_tmp, store) = setup_store();
+        let tickets = run_batch(&store, "").unwrap();
+        assert!(tickets.is_empty(), "expected empty result for empty input");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_only_blank_lines_returns_empty_vec() {
+        let (_tmp, store) = setup_store();
+        let tickets = run_batch(&store, "\n\n  \n\n").unwrap();
+        assert!(tickets.is_empty(), "expected empty result for blank-only input");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_unknown_fields_are_ignored() {
+        let (_tmp, store) = setup_store();
+        let input = r#"{"title": "Has extras", "id": "uf1", "bogus_field": 42, "another": "ignored"}
+"#;
+        let tickets = run_batch(&store, input).unwrap();
+        assert_eq!(tickets.len(), 1);
+        assert_eq!(tickets[0].title, "Has extras");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_malformed_json_after_valid_line_reports_correct_line() {
+        let (_tmp, store) = setup_store();
+        let input = r#"{"title": "Good", "id": "ok1"}
+not valid json
+"#;
+        let err = run_batch(&store, input).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("line 2"), "expected line 2 in error: {msg}");
+        // The first ticket should still exist on disk
+        let ticket = store.read_ticket("ok1").unwrap();
+        assert_eq!(ticket.title, "Good");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_forward_backref_out_of_range_is_error() {
+        let (_tmp, store) = setup_store();
+        // $2 referenced on line 1 when no tickets have been created yet
+        let input = r#"{"title": "A", "id": "ca", "dep": ["$2"]}
+{"title": "B", "id": "cb", "dep": ["$1"]}
+"#;
+        let err = run_batch(&store, input).unwrap_err();
+        let msg = err.to_string();
+        // $2 is out of range when processing line 1 (only 0 tickets created so far)
+        assert!(msg.contains("line 1"), "expected line 1 in error: {msg}");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_invalid_priority_returns_error() {
+        let (_tmp, store) = setup_store();
+        let input = "{\"title\": \"Bad prio\", \"id\": \"bp1\", \"priority\": 99}\n";
+        let err = run_batch(&store, input).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("priority"),
+            "expected priority error: {msg}"
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_json_array_instead_of_object_returns_error() {
+        let (_tmp, store) = setup_store();
+        // A JSON array on a line instead of an object
+        let input = "[{\"title\": \"inside array\"}]\n";
+        let err = run_batch(&store, input).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("title is required"),
+            "expected title error for non-object: {msg}"
+        );
+    }
+
 }

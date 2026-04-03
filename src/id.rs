@@ -320,4 +320,162 @@ mod tests {
         let err = Error::IdExists("test".into());
         assert_eq!(err.code(), "id_exists");
     }
+
+    // ── edge-case tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn validate_rejects_unicode_characters() {
+        let err = validate_id("vm-café").unwrap_err();
+        assert!(matches!(err, Error::InvalidField(_)));
+    }
+
+    #[test]
+    fn validate_rejects_unicode_emoji() {
+        let err = validate_id("vm-🎉abc").unwrap_err();
+        assert!(matches!(err, Error::InvalidField(_)));
+    }
+
+    #[test]
+    fn validate_rejects_cjk_characters() {
+        let err = validate_id("vm-票据").unwrap_err();
+        assert!(matches!(err, Error::InvalidField(_)));
+    }
+
+    #[test]
+    fn validate_rejects_very_long_id() {
+        // 1000+ character ID — should still be accepted since all chars are valid
+        let long_id = "a".repeat(1500);
+        assert!(validate_id(&long_id).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_very_long_id_with_unicode() {
+        // 1000+ chars but contains invalid unicode
+        let mut long_id = "a".repeat(1000);
+        long_id.push('é');
+        let err = validate_id(&long_id).unwrap_err();
+        assert!(matches!(err, Error::InvalidField(_)));
+    }
+
+    #[test]
+    fn validate_rejects_spaces() {
+        let err = validate_id("vm abc").unwrap_err();
+        assert!(matches!(err, Error::InvalidField(_)));
+    }
+
+    #[test]
+    fn validate_just_prefix_no_suffix() {
+        // A bare prefix like "vm" with no dash or suffix is still a valid ID string
+        assert!(validate_id("vm").is_ok());
+    }
+
+    #[test]
+    fn validate_just_dash() {
+        assert!(validate_id("-").is_ok());
+    }
+
+    #[test]
+    fn validate_just_underscore() {
+        assert!(validate_id("_").is_ok());
+    }
+
+    #[test]
+    fn get_prefix_from_dir_with_dashes_and_numbers() {
+        let base = make_tmp_dir("get-prefix-dash-num");
+        let proj = base.join("my-cool-project-2");
+        fs::create_dir_all(&proj).unwrap();
+
+        let prefix = get_prefix(&proj).unwrap();
+        assert_eq!(prefix, "mcp2");
+    }
+
+    #[test]
+    fn get_prefix_from_dir_with_underscores() {
+        let base = make_tmp_dir("get-prefix-underscores");
+        let proj = base.join("my_project_name");
+        fs::create_dir_all(&proj).unwrap();
+
+        let prefix = get_prefix(&proj).unwrap();
+        assert_eq!(prefix, "mpn");
+    }
+
+    #[test]
+    fn get_prefix_from_dir_with_mixed_separators() {
+        let base = make_tmp_dir("get-prefix-mixed-sep");
+        let proj = base.join("my-cool_project");
+        fs::create_dir_all(&proj).unwrap();
+
+        let prefix = get_prefix(&proj).unwrap();
+        assert_eq!(prefix, "mcp");
+    }
+
+    #[test]
+    fn get_prefix_from_numeric_dir() {
+        let base = make_tmp_dir("get-prefix-numeric");
+        let proj = base.join("123");
+        fs::create_dir_all(&proj).unwrap();
+
+        let prefix = get_prefix(&proj).unwrap();
+        assert_eq!(prefix, "12");
+    }
+
+    #[test]
+    fn get_prefix_from_single_char_dir() {
+        let base = make_tmp_dir("get-prefix-single-char");
+        let proj = base.join("x");
+        fs::create_dir_all(&proj).unwrap();
+
+        let prefix = get_prefix(&proj).unwrap();
+        assert_eq!(prefix, "x");
+    }
+
+    #[test]
+    fn generate_id_with_long_prefix() {
+        let dir = make_tmp_dir("generate-id-long-prefix");
+        let id = generate_id("my-long-prefix", &dir).unwrap();
+        assert!(id.starts_with("my-long-prefix-"));
+        let suffix = &id["my-long-prefix-".len()..];
+        assert_eq!(suffix.len(), 4);
+    }
+
+    #[test]
+    fn generate_id_with_numeric_prefix() {
+        let dir = make_tmp_dir("generate-id-numeric-prefix");
+        let id = generate_id("42", &dir).unwrap();
+        assert!(id.starts_with("42-"));
+        assert!(validate_id(&id).is_ok());
+    }
+
+    #[test]
+    fn generate_id_always_passes_validate() {
+        let dir = make_tmp_dir("generate-id-validates");
+        for _ in 0..20 {
+            let id = generate_id("vm", &dir).unwrap();
+            assert!(validate_id(&id).is_ok(), "generated id '{}' failed validation", id);
+        }
+    }
+
+    #[test]
+    fn resolve_id_is_case_sensitive() {
+        let dir = make_tmp_dir("resolve-case-sensitive");
+        fs::write(dir.join("VM-ABC1.md"), "").unwrap();
+
+        // Searching for lowercase should not find uppercase file (case-sensitive matching)
+        let result = resolve_id(&dir, "vm-abc1", false);
+        // On case-sensitive filesystems this is NotFound; the match is case-sensitive
+        // because contains() is case-sensitive
+        assert!(
+            result.is_err() || result.unwrap() != "VM-ABC1",
+            "resolve_id should not case-insensitively match"
+        );
+    }
+
+    #[test]
+    fn resolve_id_trims_whitespace() {
+        let dir = make_tmp_dir("resolve-trim-ws");
+        fs::write(dir.join("vm-abc1.md"), "").unwrap();
+
+        // Leading/trailing whitespace should be trimmed
+        assert_eq!(resolve_id(&dir, "  vm-abc1  ", false).unwrap(), "vm-abc1");
+    }
 }

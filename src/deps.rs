@@ -686,4 +686,352 @@ mod tests {
         assert_eq!(cycles.len(), 1, "same cycle found from different starts should be deduped");
         assert_eq!(cycles[0], vec!["A", "B"]);
     }
+
+    // ── stress / complex-graph tests ────────────────────────────────────────
+
+    #[test]
+    fn empty_dependency_graph_compute_reverse_fields() {
+        // Many tickets, none with deps or parents — all blocks/children stay empty
+        let mut tickets: Vec<Ticket> = (0..50)
+            .map(|i| make_ticket(&format!("T-{i:04}"), vec![], None))
+            .collect();
+        compute_reverse_fields(&mut tickets);
+        for t in &tickets {
+            assert!(t.blocks.is_empty(), "ticket {} should have no blocks", t.id);
+            assert!(t.children.is_empty(), "ticket {} should have no children", t.id);
+        }
+    }
+
+    #[test]
+    fn empty_dependency_graph_no_cycles() {
+        let tickets: Vec<Ticket> = (0..50)
+            .map(|i| make_ticket(&format!("T-{i:04}"), vec![], None))
+            .collect();
+        let cycles = detect_all_cycles(&tickets);
+        assert!(cycles.is_empty());
+    }
+
+    #[test]
+    fn empty_dependency_graph_build_tree_leaf() {
+        // A ticket with no deps produces a tree with zero children
+        let tickets = vec![make_ticket("SOLO", vec![], None)];
+        let tree = build_dep_tree(&tickets, "SOLO", false).unwrap();
+        assert_eq!(tree.id, "SOLO");
+        assert!(tree.deps.is_empty());
+    }
+
+    #[test]
+    fn very_deep_chain_build_tree() {
+        // Chain of 60 tickets: T-0000 → T-0001 → ... → T-0059
+        let n = 60;
+        let tickets: Vec<Ticket> = (0..n)
+            .map(|i| {
+                let id = format!("T-{i:04}");
+                let deps = if i + 1 < n {
+                    vec![format!("T-{:04}", i + 1)]
+                } else {
+                    vec![]
+                };
+                make_ticket_owned(&id, &deps, None)
+            })
+            .collect();
+
+        let tree = build_dep_tree(&tickets, "T-0000", true).unwrap();
+
+        // Walk the tree to verify full depth
+        let mut node = &tree;
+        let mut depth = 0;
+        while !node.deps.is_empty() {
+            assert_eq!(node.deps.len(), 1);
+            node = &node.deps[0];
+            depth += 1;
+        }
+        assert_eq!(depth, n - 1, "tree should be {} levels deep", n - 1);
+    }
+
+    #[test]
+    fn very_deep_chain_no_cycle() {
+        let n = 60;
+        let tickets: Vec<Ticket> = (0..n)
+            .map(|i| {
+                let id = format!("T-{i:04}");
+                let deps = if i + 1 < n {
+                    vec![format!("T-{:04}", i + 1)]
+                } else {
+                    vec![]
+                };
+                make_ticket_owned(&id, &deps, None)
+            })
+            .collect();
+        let cycles = detect_all_cycles(&tickets);
+        assert!(cycles.is_empty());
+    }
+
+    #[test]
+    fn very_deep_chain_reverse_fields() {
+        let n = 60;
+        let mut tickets: Vec<Ticket> = (0..n)
+            .map(|i| {
+                let id = format!("T-{i:04}");
+                let deps = if i + 1 < n {
+                    vec![format!("T-{:04}", i + 1)]
+                } else {
+                    vec![]
+                };
+                make_ticket_owned(&id, &deps, None)
+            })
+            .collect();
+        compute_reverse_fields(&mut tickets);
+
+        // First ticket blocks nothing (it is the root)
+        let first = tickets.iter().find(|t| t.id == "T-0000").unwrap();
+        assert!(first.blocks.is_empty());
+
+        // Last ticket is blocked by the second-to-last
+        let last = tickets.iter().find(|t| t.id == format!("T-{:04}", n - 1)).unwrap();
+        assert_eq!(last.blocks, vec![format!("T-{:04}", n - 2)]);
+    }
+
+    #[test]
+    fn wide_tree_build_tree() {
+        // Root with 120 leaf children
+        let child_count = 120;
+        let child_ids: Vec<String> = (0..child_count).map(|i| format!("C-{i:04}")).collect();
+
+        let mut tickets: Vec<Ticket> = vec![{
+            let deps_refs: Vec<&str> = child_ids.iter().map(|s| s.as_str()).collect();
+            make_ticket("ROOT", deps_refs, None)
+        }];
+        for cid in &child_ids {
+            tickets.push(make_ticket(cid, vec![], None));
+        }
+
+        let tree = build_dep_tree(&tickets, "ROOT", true).unwrap();
+        assert_eq!(tree.deps.len(), child_count);
+
+        // Children should be sorted by id (all have the same subtree height 0)
+        let mut sorted_ids = child_ids.clone();
+        sorted_ids.sort();
+        let tree_child_ids: Vec<&str> = tree.deps.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(tree_child_ids, sorted_ids.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn wide_tree_reverse_fields() {
+        let child_count = 120;
+        let child_ids: Vec<String> = (0..child_count).map(|i| format!("C-{i:04}")).collect();
+
+        let mut tickets: Vec<Ticket> = vec![{
+            let deps_refs: Vec<&str> = child_ids.iter().map(|s| s.as_str()).collect();
+            make_ticket("ROOT", deps_refs, None)
+        }];
+        for cid in &child_ids {
+            tickets.push(make_ticket(cid, vec![], None));
+        }
+
+        compute_reverse_fields(&mut tickets);
+
+        // Each child should have ROOT in its blocks list
+        for cid in &child_ids {
+            let child = tickets.iter().find(|t| t.id == *cid).unwrap();
+            assert_eq!(child.blocks, vec!["ROOT"], "child {} should be blocked by ROOT", cid);
+        }
+    }
+
+    #[test]
+    fn diamond_dedup_shows_d_once() {
+        // A→B, A→C, B→D, C→D — dedup mode: D appears exactly once
+        let tickets = vec![
+            make_ticket("A", vec!["B", "C"], None),
+            make_ticket("B", vec!["D"], None),
+            make_ticket("C", vec!["D"], None),
+            make_ticket("D", vec![], None),
+        ];
+        let tree = build_dep_tree(&tickets, "A", false).unwrap();
+        fn count_id(node: &TreeNode, target: &str) -> usize {
+            let here = if node.id == target { 1 } else { 0 };
+            here + node.deps.iter().map(|c| count_id(c, target)).sum::<usize>()
+        }
+        assert_eq!(count_id(&tree, "D"), 1, "D should appear exactly once in dedup mode");
+    }
+
+    #[test]
+    fn diamond_full_shows_d_twice() {
+        // Same diamond, full mode: D appears twice
+        let tickets = vec![
+            make_ticket("A", vec!["B", "C"], None),
+            make_ticket("B", vec!["D"], None),
+            make_ticket("C", vec!["D"], None),
+            make_ticket("D", vec![], None),
+        ];
+        let tree = build_dep_tree(&tickets, "A", true).unwrap();
+        fn count_id(node: &TreeNode, target: &str) -> usize {
+            let here = if node.id == target { 1 } else { 0 };
+            here + node.deps.iter().map(|c| count_id(c, target)).sum::<usize>()
+        }
+        assert_eq!(count_id(&tree, "D"), 2, "D should appear twice in full mode");
+    }
+
+    #[test]
+    fn tree_with_multiple_missing_deps() {
+        // A depends on three non-existent tickets
+        let tickets = vec![make_ticket("A", vec!["ghost1", "ghost2", "ghost3"], None)];
+        let tree = build_dep_tree(&tickets, "A", false).unwrap();
+        assert_eq!(tree.deps.len(), 3);
+        for child in &tree.deps {
+            assert!(child.title.contains("[missing]"), "missing dep {} not marked", child.id);
+        }
+    }
+
+    #[test]
+    fn tree_mixed_present_and_missing_deps() {
+        // A depends on B (exists) and ghost (missing)
+        let tickets = vec![
+            make_ticket("A", vec!["B", "ghost"], None),
+            make_ticket("B", vec![], None),
+        ];
+        let tree = build_dep_tree(&tickets, "A", true).unwrap();
+        assert_eq!(tree.deps.len(), 2);
+
+        let b_node = tree.deps.iter().find(|n| n.id == "B").unwrap();
+        assert!(!b_node.title.contains("[missing]"));
+
+        let ghost_node = tree.deps.iter().find(|n| n.id == "ghost").unwrap();
+        assert!(ghost_node.title.contains("[missing]"));
+    }
+
+    #[test]
+    fn complex_multi_path_overlapping_deps() {
+        // Complex graph:
+        //   A → B, C, D
+        //   B → E, F
+        //   C → F, G
+        //   D → G, H
+        //   E, F, G, H are leaves
+        // In full mode: F appears under B and C; G appears under C and D
+        let tickets = vec![
+            make_ticket("A", vec!["B", "C", "D"], None),
+            make_ticket("B", vec!["E", "F"], None),
+            make_ticket("C", vec!["F", "G"], None),
+            make_ticket("D", vec!["G", "H"], None),
+            make_ticket("E", vec![], None),
+            make_ticket("F", vec![], None),
+            make_ticket("G", vec![], None),
+            make_ticket("H", vec![], None),
+        ];
+
+        fn count_id(node: &TreeNode, target: &str) -> usize {
+            let here = if node.id == target { 1 } else { 0 };
+            here + node.deps.iter().map(|c| count_id(c, target)).sum::<usize>()
+        }
+
+        // Full mode: shared leaves appear multiple times
+        let full_tree = build_dep_tree(&tickets, "A", true).unwrap();
+        assert_eq!(count_id(&full_tree, "F"), 2, "F shared by B and C in full mode");
+        assert_eq!(count_id(&full_tree, "G"), 2, "G shared by C and D in full mode");
+        assert_eq!(count_id(&full_tree, "E"), 1);
+        assert_eq!(count_id(&full_tree, "H"), 1);
+
+        // Dedup mode: each leaf appears once
+        let dedup_tree = build_dep_tree(&tickets, "A", false).unwrap();
+        assert_eq!(count_id(&dedup_tree, "F"), 1, "F should appear once in dedup mode");
+        assert_eq!(count_id(&dedup_tree, "G"), 1, "G should appear once in dedup mode");
+    }
+
+    #[test]
+    fn complex_deep_and_wide_combined() {
+        // Root has 10 children, each child has a chain of 10 deep
+        // Total: 1 root + 10 * 10 = 101 tickets
+        let mut tickets: Vec<Ticket> = Vec::new();
+        let mut root_deps: Vec<String> = Vec::new();
+
+        for branch in 0..10 {
+            let chain: Vec<String> = (0..10)
+                .map(|depth| format!("B{branch}-D{depth}"))
+                .collect();
+            root_deps.push(chain[0].clone());
+
+            for (i, id) in chain.iter().enumerate() {
+                let deps = if i + 1 < chain.len() {
+                    vec![chain[i + 1].as_str()]
+                } else {
+                    vec![]
+                };
+                tickets.push(make_ticket(id, deps, None));
+            }
+        }
+
+        let root_dep_refs: Vec<&str> = root_deps.iter().map(|s| s.as_str()).collect();
+        tickets.push(make_ticket("ROOT", root_dep_refs, None));
+
+        let tree = build_dep_tree(&tickets, "ROOT", true).unwrap();
+        assert_eq!(tree.deps.len(), 10, "root should have 10 children");
+
+        // Each branch should have depth 9 (10 nodes, 9 edges)
+        for branch_root in &tree.deps {
+            let mut depth = 0;
+            let mut node = branch_root;
+            while !node.deps.is_empty() {
+                assert_eq!(node.deps.len(), 1);
+                node = &node.deps[0];
+                depth += 1;
+            }
+            assert_eq!(depth, 9, "branch {} should be 9 levels deep", branch_root.id);
+        }
+
+        // No cycles
+        let cycles = detect_all_cycles(&tickets);
+        assert!(cycles.is_empty());
+    }
+
+    #[test]
+    fn detect_cycles_in_large_graph_with_one_cycle() {
+        // 50 tickets in a chain, plus one back-edge creating a single cycle
+        let n = 50;
+        let mut tickets: Vec<Ticket> = (0..n)
+            .map(|i| {
+                let id = format!("T-{i:04}");
+                let deps = if i + 1 < n {
+                    vec![format!("T-{:04}", i + 1)]
+                } else {
+                    vec![]
+                };
+                make_ticket_owned(&id, &deps, None)
+            })
+            .collect();
+
+        // Add back-edge: last ticket depends on ticket 25, creating cycle 25→26→...→49→25
+        tickets.last_mut().unwrap().deps.push("T-0025".to_string());
+
+        let cycles = detect_all_cycles(&tickets);
+        assert_eq!(cycles.len(), 1, "should detect exactly one cycle");
+        // Cycle should contain tickets 25 through 49
+        let cycle = &cycles[0];
+        assert_eq!(cycle.len(), n - 25, "cycle should contain 25 nodes");
+    }
+
+    /// Helper that takes owned strings for deps (needed when deps are generated dynamically)
+    fn make_ticket_owned(id: &str, deps: &[String], parent: Option<&str>) -> Ticket {
+        Ticket {
+            id: id.to_string(),
+            title: format!("Ticket {id}"),
+            status: Status::Open,
+            ticket_type: TicketType::Task,
+            priority: 2,
+            tags: vec![],
+            assignee: None,
+            estimate: None,
+            deps: deps.to_vec(),
+            links: vec![],
+            parent: parent.map(|s| s.to_string()),
+            created: "2026-04-02T00:00:00Z".to_string(),
+            description: None,
+            design: None,
+            acceptance: None,
+            notes: vec![],
+            body: None,
+            blocks: vec![],
+            children: vec![],
+        }
+    }
 }

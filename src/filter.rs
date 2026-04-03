@@ -272,4 +272,172 @@ mod tests {
         assert_eq!(result[0].id, "a");
         assert_eq!(result[1].id, "b");
     }
+
+    #[test]
+    fn all_criteria_applied_simultaneously() {
+        let filter = Filter {
+            status: Some(Status::InProgress),
+            tags: vec!["backend".to_string(), "api".to_string()],
+            ticket_type: Some(TicketType::Feature),
+            priority_range: Some((1, 3)),
+            assignee: Some("carol".to_string()),
+            limit: None,
+        };
+
+        // Ticket that satisfies every criterion
+        let mut pass = make_ticket("t1", Status::InProgress, 2);
+        pass.ticket_type = TicketType::Feature;
+        pass.tags = vec!["backend".to_string()];
+        pass.assignee = Some("carol".to_string());
+        assert!(filter.matches(&pass));
+
+        // Fails status
+        let mut fail_status = pass.clone();
+        fail_status.status = Status::Open;
+        assert!(!filter.matches(&fail_status));
+
+        // Fails tags
+        let mut fail_tags = pass.clone();
+        fail_tags.tags = vec!["frontend".to_string()];
+        assert!(!filter.matches(&fail_tags));
+
+        // Fails ticket type
+        let mut fail_type = pass.clone();
+        fail_type.ticket_type = TicketType::Bug;
+        assert!(!filter.matches(&fail_type));
+
+        // Fails priority (too high)
+        let mut fail_pri = pass.clone();
+        fail_pri.priority = 4;
+        assert!(!filter.matches(&fail_pri));
+
+        // Fails assignee
+        let mut fail_assignee = pass.clone();
+        fail_assignee.assignee = Some("dave".to_string());
+        assert!(!filter.matches(&fail_assignee));
+
+        // No assignee at all
+        let mut fail_no_assignee = pass.clone();
+        fail_no_assignee.assignee = None;
+        assert!(!filter.matches(&fail_no_assignee));
+    }
+
+    #[test]
+    fn empty_filter_results() {
+        let filter = Filter {
+            status: Some(Status::Closed),
+            tags: vec![],
+            ticket_type: None,
+            priority_range: None,
+            assignee: None,
+            limit: None,
+        };
+        let tickets = vec![
+            make_ticket("a", Status::Open, 0),
+            make_ticket("b", Status::InProgress, 1),
+        ];
+        let result = apply_filters(tickets, &filter);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn priority_range_0_0_matches_only_zero() {
+        let filter = Filter {
+            status: None,
+            tags: vec![],
+            ticket_type: None,
+            priority_range: Some((0, 0)),
+            assignee: None,
+            limit: None,
+        };
+        assert!(filter.matches(&make_ticket("a", Status::Open, 0)));
+        assert!(!filter.matches(&make_ticket("b", Status::Open, 1)));
+        assert!(!filter.matches(&make_ticket("c", Status::Open, 4)));
+    }
+
+    #[test]
+    fn priority_range_4_4_matches_only_four() {
+        let filter = Filter {
+            status: None,
+            tags: vec![],
+            ticket_type: None,
+            priority_range: Some((4, 4)),
+            assignee: None,
+            limit: None,
+        };
+        assert!(!filter.matches(&make_ticket("a", Status::Open, 0)));
+        assert!(!filter.matches(&make_ticket("b", Status::Open, 3)));
+        assert!(filter.matches(&make_ticket("c", Status::Open, 4)));
+    }
+
+    #[test]
+    fn sort_stability_same_priority_ordered_by_id() {
+        let filter = Filter {
+            status: None,
+            tags: vec![],
+            ticket_type: None,
+            priority_range: None,
+            assignee: None,
+            limit: None,
+        };
+        // All same priority; input order is reverse-alphabetical
+        let tickets = vec![
+            make_ticket("zz", Status::Open, 2),
+            make_ticket("mm", Status::Open, 2),
+            make_ticket("aa", Status::Open, 2),
+        ];
+        let result = apply_filters(tickets, &filter);
+        assert_eq!(result[0].id, "aa");
+        assert_eq!(result[1].id, "mm");
+        assert_eq!(result[2].id, "zz");
+    }
+
+    #[test]
+    fn limit_larger_than_result_set() {
+        let filter = Filter {
+            status: None,
+            tags: vec![],
+            ticket_type: None,
+            priority_range: None,
+            assignee: None,
+            limit: Some(100),
+        };
+        let tickets = vec![
+            make_ticket("a", Status::Open, 0),
+            make_ticket("b", Status::Open, 1),
+        ];
+        let result = apply_filters(tickets, &filter);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn multiple_tags_or_logic() {
+        let filter = Filter {
+            status: None,
+            tags: vec!["x".to_string(), "y".to_string(), "z".to_string()],
+            ticket_type: None,
+            priority_range: None,
+            assignee: None,
+            limit: None,
+        };
+
+        // Has one of the tags
+        let mut t1 = make_ticket("a", Status::Open, 0);
+        t1.tags = vec!["y".to_string()];
+        assert!(filter.matches(&t1));
+
+        // Has two of the tags
+        let mut t2 = make_ticket("b", Status::Open, 0);
+        t2.tags = vec!["x".to_string(), "z".to_string()];
+        assert!(filter.matches(&t2));
+
+        // Has none of the tags
+        let mut t3 = make_ticket("c", Status::Open, 0);
+        t3.tags = vec!["w".to_string()];
+        assert!(!filter.matches(&t3));
+
+        // Has no tags at all
+        let t4 = make_ticket("d", Status::Open, 0);
+        assert!(!filter.matches(&t4));
+    }
 }

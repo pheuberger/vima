@@ -716,4 +716,345 @@ parent: blocker
         let err = store.load_and_compute("nonexistent").unwrap_err();
         assert!(matches!(err, Error::NotFound(_)));
     }
+
+    // --- round-trip tests for notes, links, parent ---
+
+    fn make_minimal_ticket(id: &str) -> Ticket {
+        Ticket {
+            id: id.to_string(),
+            title: "Minimal ticket".to_string(),
+            status: Status::Open,
+            ticket_type: TicketType::Task,
+            priority: 2,
+            tags: vec![],
+            assignee: None,
+            estimate: None,
+            deps: vec![],
+            links: vec![],
+            parent: None,
+            created: "2026-04-02T00:00:00Z".to_string(),
+            description: None,
+            design: None,
+            acceptance: None,
+            notes: vec![],
+            body: None,
+            blocks: vec![],
+            children: vec![],
+        }
+    }
+
+    #[test]
+    #[serial(env)]
+    fn round_trip_notes_with_timestamps_and_content() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let mut ticket = make_minimal_ticket("rt-n001");
+        ticket.notes = vec![
+            Note {
+                timestamp: "2026-04-02T08:00:00Z".to_string(),
+                text: "First note".to_string(),
+            },
+            Note {
+                timestamp: "2026-04-02T09:30:00Z".to_string(),
+                text: "Second note with special: chars".to_string(),
+            },
+            Note {
+                timestamp: "2026-04-02T10:00:00Z".to_string(),
+                text: "Multi-line note\nwith second line\nand third".to_string(),
+            },
+        ];
+        store.write_ticket(&ticket).unwrap();
+        let read_back = store.read_ticket(&ticket.id).unwrap();
+
+        assert_eq!(read_back.notes.len(), 3);
+        assert_eq!(read_back.notes[0].timestamp, "2026-04-02T08:00:00Z");
+        assert_eq!(read_back.notes[0].text, "First note");
+        assert_eq!(read_back.notes[1].timestamp, "2026-04-02T09:30:00Z");
+        assert_eq!(read_back.notes[1].text, "Second note with special: chars");
+        assert_eq!(read_back.notes[2].timestamp, "2026-04-02T10:00:00Z");
+        assert_eq!(read_back.notes[2].text, "Multi-line note\nwith second line\nand third");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn round_trip_links() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let mut ticket = make_minimal_ticket("rt-l001");
+        ticket.links = vec![
+            "https://example.com/issue/1".to_string(),
+            "https://docs.example.com/spec".to_string(),
+        ];
+        store.write_ticket(&ticket).unwrap();
+        let read_back = store.read_ticket(&ticket.id).unwrap();
+
+        assert_eq!(read_back.links.len(), 2);
+        assert_eq!(read_back.links[0], "https://example.com/issue/1");
+        assert_eq!(read_back.links[1], "https://docs.example.com/spec");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn round_trip_parent() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let mut ticket = make_minimal_ticket("rt-p001");
+        ticket.parent = Some("rt-epic1".to_string());
+        store.write_ticket(&ticket).unwrap();
+        let read_back = store.read_ticket(&ticket.id).unwrap();
+
+        assert_eq!(read_back.parent, Some("rt-epic1".to_string()));
+    }
+
+    #[test]
+    #[serial(env)]
+    fn round_trip_empty_notes() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let ticket = make_minimal_ticket("rt-en01");
+        store.write_ticket(&ticket).unwrap();
+        let read_back = store.read_ticket(&ticket.id).unwrap();
+
+        assert!(read_back.notes.is_empty());
+    }
+
+    #[test]
+    #[serial(env)]
+    fn round_trip_empty_links() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let ticket = make_minimal_ticket("rt-el01");
+        store.write_ticket(&ticket).unwrap();
+        let read_back = store.read_ticket(&ticket.id).unwrap();
+
+        assert!(read_back.links.is_empty());
+    }
+
+    #[test]
+    #[serial(env)]
+    fn round_trip_all_optional_fields() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let mut ticket = make_minimal_ticket("rt-af01");
+        ticket.notes = vec![
+            Note {
+                timestamp: "2026-04-02T12:00:00Z".to_string(),
+                text: "progress update".to_string(),
+            },
+        ];
+        ticket.links = vec!["https://design.example.com".to_string()];
+        ticket.parent = Some("rt-epic2".to_string());
+        ticket.assignee = Some("bob".to_string());
+        ticket.estimate = Some(120);
+        ticket.description = Some("A detailed description".to_string());
+        ticket.design = Some("Design doc".to_string());
+        ticket.acceptance = Some("Must pass CI".to_string());
+        ticket.tags = vec!["backend".to_string(), "urgent".to_string()];
+        ticket.body = Some("Extended body content here.".to_string());
+
+        store.write_ticket(&ticket).unwrap();
+        let read_back = store.read_ticket(&ticket.id).unwrap();
+
+        assert_eq!(read_back.notes.len(), 1);
+        assert_eq!(read_back.notes[0].timestamp, "2026-04-02T12:00:00Z");
+        assert_eq!(read_back.notes[0].text, "progress update");
+        assert_eq!(read_back.links, vec!["https://design.example.com"]);
+        assert_eq!(read_back.parent, Some("rt-epic2".to_string()));
+        assert_eq!(read_back.assignee, Some("bob".to_string()));
+        assert_eq!(read_back.estimate, Some(120));
+        assert_eq!(read_back.description, Some("A detailed description".to_string()));
+        assert_eq!(read_back.design, Some("Design doc".to_string()));
+        assert_eq!(read_back.acceptance, Some("Must pass CI".to_string()));
+        assert_eq!(read_back.tags, vec!["backend", "urgent"]);
+        assert_eq!(read_back.body, Some("Extended body content here.".to_string()));
+    }
+
+    #[test]
+    fn write_yaml_notes_serializes_empty() {
+        let mut out = String::new();
+        write_yaml_notes(&mut out, &[]);
+        assert_eq!(out, "notes: []\n");
+    }
+
+    #[test]
+    fn write_yaml_notes_serializes_single() {
+        let mut out = String::new();
+        let notes = vec![Note {
+            timestamp: "2026-04-02T00:00:00Z".to_string(),
+            text: "hello".to_string(),
+        }];
+        write_yaml_notes(&mut out, &notes);
+        assert!(out.contains("notes:\n"));
+        assert!(out.contains("timestamp:"));
+        assert!(out.contains("text: hello"));
+    }
+
+    #[test]
+    fn write_yaml_array_empty_produces_brackets() {
+        let mut out = String::new();
+        write_yaml_array(&mut out, "links", &[]);
+        assert_eq!(out, "links: []\n");
+    }
+
+    #[test]
+    fn write_yaml_array_with_items() {
+        let mut out = String::new();
+        let items = vec!["a".to_string(), "b".to_string()];
+        write_yaml_array(&mut out, "tags", &items);
+        assert_eq!(out, "tags: [a, b]\n");
+    }
+
+    // --- IO error and corrupt data tests ---
+
+    #[test]
+    #[serial(env)]
+    fn read_ticket_corrupt_yaml_frontmatter() {
+        let content = "---\nid: [invalid yaml\ntitle: broken\n---\n";
+        let (_tmp, store, id) = store_with_ticket(content);
+        let err = store.read_ticket(&id).unwrap_err();
+        assert!(
+            matches!(err, Error::YamlError(_)),
+            "expected YamlError, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn read_ticket_no_yaml_frontmatter() {
+        let content = "This is just plain text with no frontmatter at all.\n";
+        let (_tmp, store, id) = store_with_ticket(content);
+        let err = store.read_ticket(&id).unwrap_err();
+        assert!(
+            matches!(err, Error::YamlError(_)),
+            "expected YamlError, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn read_ticket_truncated_yaml_missing_closing_dashes() {
+        let content = "---\nid: test-abc\ntitle: Truncated\nstatus: open\n";
+        let (_tmp, store, id) = store_with_ticket(content);
+        let result = store.read_ticket(&id);
+        assert!(
+            result.is_err(),
+            "expected an error for truncated YAML, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn read_ticket_valid_yaml_missing_required_fields() {
+        let content = "---\nid: test-abc\npriority: 2\n---\n";
+        let (_tmp, store, id) = store_with_ticket(content);
+        let err = store.read_ticket(&id).unwrap_err();
+        assert!(
+            matches!(err, Error::YamlError(_)),
+            "expected YamlError for missing required fields, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn read_ticket_invalid_enum_value() {
+        let content = r#"---
+id: test-abc
+title: Bad Status
+status: banana
+type: task
+priority: 2
+created: "2026-04-02T00:00:00Z"
+---
+"#;
+        let (_tmp, store, id) = store_with_ticket(content);
+        let err = store.read_ticket(&id).unwrap_err();
+        assert!(
+            matches!(err, Error::YamlError(_)),
+            "expected YamlError for invalid enum, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn read_ticket_nonexistent_file_returns_io_error() {
+        let (_tmp, store, _tickets_dir) = make_store();
+        let err = store.read_ticket("does-not-exist").unwrap_err();
+        assert!(
+            matches!(err, Error::IoError(_)),
+            "expected IoError for missing file, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn read_all_skips_corrupt_keeps_valid() {
+        let (_tmp, store, tickets_dir) = make_store();
+        fs::write(tickets_dir.join("good-aaaa.md"), VALID_TICKET).unwrap();
+        fs::write(
+            tickets_dir.join("bad-bbbb.md"),
+            "---\nid: [broken yaml\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            tickets_dir.join("bad-cccc.md"),
+            "---\nid: bad-cccc\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            tickets_dir.join("bad-dddd.md"),
+            "Just plain text, no frontmatter.\n",
+        )
+        .unwrap();
+
+        let tickets = store.read_all().unwrap();
+        assert_eq!(tickets.len(), 1);
+        assert_eq!(tickets[0].id, "test-abc");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn write_ticket_readonly_directory_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_tmp, store, tickets_dir) = make_store();
+        let ticket = make_full_ticket();
+
+        fs::set_permissions(&tickets_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = store.write_ticket(&ticket);
+        assert!(
+            result.is_err(),
+            "expected error writing to read-only directory"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, Error::IoError(_)),
+            "expected IoError for permission denied, got: {:?}",
+            err
+        );
+
+        fs::set_permissions(&tickets_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    #[serial(env)]
+    fn read_ticket_invalid_utf8() {
+        let (_tmp, store, tickets_dir) = make_store();
+        let id = "bad-utf8";
+        let path = tickets_dir.join(format!("{}.md", id));
+        let invalid_bytes: Vec<u8> = vec![
+            0x2d, 0x2d, 0x2d, 0x0a, // ---\n
+            0x69, 0x64, 0x3a, 0x20, // id:
+            0xff, 0xfe, 0x0a, // invalid UTF-8 bytes + newline
+            0x2d, 0x2d, 0x2d, 0x0a, // ---\n
+        ];
+        fs::write(&path, invalid_bytes).unwrap();
+
+        let err = store.read_ticket(id).unwrap_err();
+        assert!(
+            matches!(err, Error::IoError(_)),
+            "expected IoError for invalid UTF-8, got: {:?}",
+            err
+        );
+    }
 }
