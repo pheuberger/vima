@@ -1115,10 +1115,10 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Help(args) => cmd_help(args),
         Commands::External(args) => {
             let cmd = &args[0];
-            if plugin::try_plugin(cmd, &args[1..]).is_none() {
-                return Err(Error::InvalidField(format!("unknown command: {}", cmd)));
+            match plugin::try_plugin(cmd, &args[1..]) {
+                None => Err(Error::InvalidField(format!("unknown command: {}", cmd))),
+                Some(result) => result,
             }
-            Ok(())
         }
     }
 }

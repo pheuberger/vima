@@ -2,11 +2,14 @@ use std::env;
 use std::io::BufRead;
 use std::path::Path;
 
+use crate::error::Error;
 use crate::store::find_vima_root;
 
 /// Attempt to find and execute a plugin named `vima-{command}`.
-/// Returns None if no plugin found on PATH. Never returns on success (process is replaced).
-pub fn try_plugin(command: &str, args: &[String]) -> Option<()> {
+/// Returns None if no plugin found on PATH.
+/// Returns Some(Err(...)) if the plugin was found but exec failed.
+/// Never returns Some(Ok(())) — on success the process is replaced.
+pub fn try_plugin(command: &str, args: &[String]) -> Option<Result<(), Error>> {
     let plugin_name = format!("vima-{}", command);
     let path = which::which(&plugin_name).ok()?;
 
@@ -22,8 +25,10 @@ pub fn try_plugin(command: &str, args: &[String]) -> Option<()> {
     }
 
     let err = exec::Command::new(&path).args(args).exec();
-    eprintln!("vima: failed to execute {}: {}", plugin_name, err);
-    std::process::exit(1);
+    Some(Err(Error::PluginExec {
+        plugin: plugin_name,
+        reason: err.to_string(),
+    }))
 }
 
 /// Discover all `vima-*` plugins on PATH.

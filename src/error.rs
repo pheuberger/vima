@@ -22,6 +22,10 @@ pub enum Error {
     NoVimaDir,
     Io(std::io::Error),
     Yaml(String),
+    PluginExec {
+        plugin: String,
+        reason: String,
+    },
 }
 
 impl Error {
@@ -38,6 +42,7 @@ impl Error {
             Error::NoVimaDir => "no_vima_dir",
             Error::Io(_) => "io_error",
             Error::Yaml(_) => "yaml_error",
+            Error::PluginExec { .. } => "plugin_exec",
         }
     }
 
@@ -64,6 +69,7 @@ impl Error {
             Error::NoVimaDir => "run `vima init` to create a .vima/ store in this directory",
             Error::Io(_) => "check file permissions and disk space",
             Error::Yaml(_) => "check input for valid YAML/JSON syntax",
+            Error::PluginExec { .. } => "check that the plugin is installed and executable",
         }
     }
 
@@ -80,6 +86,7 @@ impl Error {
             Error::NoVimaDir => 1,
             Error::Io(_) => 1,
             Error::Yaml(_) => 1,
+            Error::PluginExec { .. } => 1,
         }
     }
 }
@@ -110,6 +117,9 @@ impl fmt::Display for Error {
             Error::NoVimaDir => write!(f, "no .vima/ directory found"),
             Error::Io(e) => write!(f, "io error: {e}"),
             Error::Yaml(msg) => write!(f, "yaml parse error: {msg}"),
+            Error::PluginExec { plugin, reason } => {
+                write!(f, "failed to execute plugin {plugin}: {reason}")
+            }
         }
     }
 }
@@ -128,6 +138,7 @@ impl std::error::Error for Error {
             Error::InvalidField(_) => None,
             Error::NoVimaDir => None,
             Error::Yaml(_) => None,
+            Error::PluginExec { .. } => None,
         }
     }
 }
@@ -180,6 +191,9 @@ pub fn error_json(err: &Error) -> serde_json::Value {
         Error::NoVimaDir => {}
         Error::Io(_) => {}
         Error::Yaml(_) => {}
+        Error::PluginExec { plugin, .. } => {
+            json["plugin"] = serde_json::json!(plugin);
+        }
     }
     json
 }
@@ -204,6 +218,18 @@ mod tests {
     #[test]
     fn cycle_exit_code() {
         assert_eq!(Error::Cycle(vec![]).exit_code(), 2);
+    }
+
+    #[test]
+    fn plugin_exec_code() {
+        assert_eq!(
+            Error::PluginExec {
+                plugin: "vima-foo".into(),
+                reason: "not found".into()
+            }
+            .code(),
+            "plugin_exec"
+        );
     }
 
     #[test]
@@ -238,6 +264,14 @@ mod tests {
             "io_error"
         );
         assert_eq!(Error::Yaml("msg".into()).code(), "yaml_error");
+        assert_eq!(
+            Error::PluginExec {
+                plugin: "vima-foo".into(),
+                reason: "x".into()
+            }
+            .code(),
+            "plugin_exec"
+        );
     }
 
     #[test]
@@ -270,6 +304,14 @@ mod tests {
             1
         );
         assert_eq!(Error::Yaml("msg".into()).exit_code(), 1);
+        assert_eq!(
+            Error::PluginExec {
+                plugin: "vima-foo".into(),
+                reason: "x".into()
+            }
+            .exit_code(),
+            1
+        );
     }
 
     #[test]
@@ -318,6 +360,10 @@ mod tests {
             Error::NoVimaDir,
             Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "x")),
             Error::Yaml("msg".into()),
+            Error::PluginExec {
+                plugin: "vima-foo".into(),
+                reason: "not found".into(),
+            },
         ];
         for err in &variants {
             assert!(
@@ -464,5 +510,34 @@ mod tests {
         assert_eq!(json["error"], "already_claimed");
         assert_eq!(json["id"], "vi-abcd");
         assert_eq!(json["current_assignee"], "agent-1");
+    }
+
+    // ── PluginExec error tests ────────────────────────────────────────────
+
+    #[test]
+    fn display_plugin_exec() {
+        let err = Error::PluginExec {
+            plugin: "vima-foo".into(),
+            reason: "permission denied".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "failed to execute plugin vima-foo: permission denied"
+        );
+    }
+
+    #[test]
+    fn plugin_exec_error_json_includes_plugin() {
+        let err = Error::PluginExec {
+            plugin: "vima-foo".into(),
+            reason: "permission denied".into(),
+        };
+        let json = error_json(&err);
+        assert_eq!(json["error"], "plugin_exec");
+        assert_eq!(json["plugin"], "vima-foo");
+        assert!(json["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("executable"));
     }
 }
