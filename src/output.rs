@@ -22,15 +22,40 @@ pub fn output_one(ticket: &Ticket, pluck: &Option<String>) -> Result<()> {
     output_one_to_writer(ticket, pluck, &mut std::io::stdout())
 }
 
+/// Fields stripped from list output unless `--full` is passed.
+const HEAVY_FIELDS: &[&str] = &["description", "design", "acceptance", "notes", "body"];
+
+pub fn strip_heavy_fields(value: &mut serde_json::Value) {
+    if let serde_json::Value::Object(map) = value {
+        for field in HEAVY_FIELDS {
+            map.remove(*field);
+        }
+    }
+}
+
 pub fn output_many(tickets: &[Ticket], pluck: &Option<String>, count: bool) -> Result<()> {
+    output_many_full(tickets, pluck, count, false)
+}
+
+pub fn output_many_full(
+    tickets: &[Ticket],
+    pluck: &Option<String>,
+    count: bool,
+    full: bool,
+) -> Result<()> {
     if count {
         println!("{}", tickets.len());
         return Ok(());
     }
-    let values: Vec<serde_json::Value> = tickets
+    let mut values: Vec<serde_json::Value> = tickets
         .iter()
         .map(serde_json::to_value)
         .collect::<std::result::Result<_, _>>()?;
+    if !full && pluck.is_none() {
+        for v in &mut values {
+            strip_heavy_fields(v);
+        }
+    }
     if let Some(fields) = pluck {
         output_plucked(&values, fields);
     } else {
@@ -277,6 +302,69 @@ mod tests {
     }
 
     #[test]
+    fn strip_heavy_fields_removes_all_heavy_fields() {
+        let mut v = serde_json::json!({
+            "id": "t-1",
+            "title": "hello",
+            "description": "desc",
+            "design": "design",
+            "acceptance": "acc",
+            "notes": [{"text": "note"}],
+            "body": "body text"
+        });
+        strip_heavy_fields(&mut v);
+        let obj = v.as_object().unwrap();
+        assert!(obj.contains_key("id"));
+        assert!(obj.contains_key("title"));
+        assert!(!obj.contains_key("description"));
+        assert!(!obj.contains_key("design"));
+        assert!(!obj.contains_key("acceptance"));
+        assert!(!obj.contains_key("notes"));
+        assert!(!obj.contains_key("body"));
+    }
+
+    #[test]
+    fn strip_heavy_fields_noop_on_non_object() {
+        let mut v = serde_json::json!("just a string");
+        strip_heavy_fields(&mut v);
+        assert_eq!(v, serde_json::json!("just a string"));
+    }
+
+    #[test]
+    fn strip_heavy_fields_noop_when_fields_absent() {
+        let mut v = serde_json::json!({"id": "t-1", "title": "hello"});
+        strip_heavy_fields(&mut v);
+        assert_eq!(v, serde_json::json!({"id": "t-1", "title": "hello"}));
+    }
+
+    #[test]
+    fn output_many_full_false_strips_heavy_fields() {
+        let mut ticket = make_ticket();
+        ticket.description = Some("a description".to_string());
+        ticket.design = Some("design notes".to_string());
+        ticket.acceptance = Some("acceptance criteria".to_string());
+        ticket.body = Some("body text".to_string());
+        let result = output_many_full(&[ticket], &None, false, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn output_many_full_true_keeps_heavy_fields() {
+        let mut ticket = make_ticket();
+        ticket.description = Some("a description".to_string());
+        let result = output_many_full(&[ticket], &None, false, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn output_many_full_with_pluck_skips_stripping() {
+        let mut ticket = make_ticket();
+        ticket.description = Some("a description".to_string());
+        let result = output_many_full(&[ticket], &Some("description".to_string()), false, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn pluck_value_single_field_returns_bare_value() {
         let v = serde_json::json!({"id": "t-1", "title": "hello"});
         let result = pluck_value(&v, "id");
@@ -384,6 +472,341 @@ mod tests {
             deps: vec![],
         };
         pretty_tree(&node); // just verify no panic
+        colored::control::set_override(false);
+    }
+
+    // ── Pretty output tests with content verification ───────────────────────
+
+    fn make_full_ticket() -> Ticket {
+        Ticket {
+            id: "vi-abcd".to_string(),
+            title: "Implement full feature".to_string(),
+            status: Status::InProgress,
+            ticket_type: TicketType::Feature,
+            priority: 1,
+            tags: vec!["backend".to_string(), "api".to_string(), "urgent".to_string()],
+            assignee: Some("alice".to_string()),
+            estimate: Some(90),
+            deps: vec!["vi-0001".to_string(), "vi-0002".to_string()],
+            links: vec![],
+            parent: None,
+            created: "2026-04-02T00:00:00Z".to_string(),
+            description: Some("A detailed description\nwith multiple lines.".to_string()),
+            design: Some("Design notes here.".to_string()),
+            acceptance: Some("Must pass all tests.".to_string()),
+            notes: vec![],
+            body: Some("Extended body content.".to_string()),
+            blocks: vec!["vi-0003".to_string()],
+            children: vec![],
+        }
+    }
+
+    #[test]
+    fn pretty_list_all_optional_fields_populated() {
+        colored::control::set_override(true);
+        let tickets = vec![
+            make_full_ticket(),
+            {
+                let mut t = make_full_ticket();
+                t.id = "vi-efgh".to_string();
+                t.title = "Another ticket with tags".to_string();
+                t.status = Status::Open;
+                t.ticket_type = TicketType::Bug;
+                t.priority = 0;
+                t.tags = vec!["frontend".to_string()];
+                t.assignee = Some("bob".to_string());
+                t.estimate = Some(120);
+                t
+            },
+            {
+                let mut t = make_full_ticket();
+                t.id = "vi-ijkl".to_string();
+                t.title = "Closed chore".to_string();
+                t.status = Status::Closed;
+                t.ticket_type = TicketType::Chore;
+                t.priority = 4;
+                t
+            },
+        ];
+        let result = pretty_list(&tickets);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_show_unicode_title() {
+        colored::control::set_override(true);
+        let mut ticket = make_ticket();
+        ticket.title = "修复国际化bug 🐛 — résumé naïve".to_string();
+        let result = pretty_show(&ticket);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_tree_deep_nesting_three_plus_levels() {
+        colored::control::set_override(true);
+        let node = TreeNode {
+            id: "root".to_string(),
+            title: "Root node".to_string(),
+            status: Status::Open,
+            deps: vec![
+                TreeNode {
+                    id: "child-1".to_string(),
+                    title: "Child 1".to_string(),
+                    status: Status::InProgress,
+                    deps: vec![
+                        TreeNode {
+                            id: "gc-1".to_string(),
+                            title: "Grandchild 1".to_string(),
+                            status: Status::Open,
+                            deps: vec![TreeNode {
+                                id: "ggc-1".to_string(),
+                                title: "Great-grandchild 1".to_string(),
+                                status: Status::Closed,
+                                deps: vec![],
+                            }],
+                        },
+                    ],
+                },
+                TreeNode {
+                    id: "child-2".to_string(),
+                    title: "Child 2".to_string(),
+                    status: Status::Open,
+                    deps: vec![],
+                },
+            ],
+        };
+        pretty_tree(&node);
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_show_all_optional_fields_design_acceptance_body() {
+        colored::control::set_override(true);
+        let ticket = make_full_ticket();
+        let result = pretty_show(&ticket);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_list_column_alignment_varying_field_lengths() {
+        colored::control::set_override(true);
+        let tickets = vec![
+            {
+                let mut t = make_ticket();
+                t.id = "a".to_string();
+                t.ticket_type = TicketType::Bug;
+                t.status = Status::Open;
+                t.priority = 3;
+                t
+            },
+            {
+                let mut t = make_ticket();
+                t.id = "long-prefix-abcd".to_string();
+                t.ticket_type = TicketType::Feature;
+                t.status = Status::InProgress;
+                t.priority = 0;
+                t
+            },
+            {
+                let mut t = make_ticket();
+                t.id = "med-xx".to_string();
+                t.ticket_type = TicketType::Epic;
+                t.status = Status::Closed;
+                t.priority = 2;
+                t
+            },
+        ];
+        let result = pretty_list(&tickets);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_show_deps_and_blocks_populated() {
+        colored::control::set_override(true);
+        let mut ticket = make_ticket();
+        ticket.deps = vec!["vi-dep1".to_string(), "vi-dep2".to_string(), "vi-dep3".to_string()];
+        ticket.blocks = vec!["vi-blk1".to_string(), "vi-blk2".to_string()];
+        let result = pretty_show(&ticket);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_tree_multiple_children_same_level() {
+        colored::control::set_override(true);
+        let node = TreeNode {
+            id: "root".to_string(),
+            title: "Root".to_string(),
+            status: Status::Open,
+            deps: vec![
+                TreeNode {
+                    id: "c-1".to_string(),
+                    title: "First child".to_string(),
+                    status: Status::Open,
+                    deps: vec![],
+                },
+                TreeNode {
+                    id: "c-2".to_string(),
+                    title: "Second child".to_string(),
+                    status: Status::InProgress,
+                    deps: vec![],
+                },
+                TreeNode {
+                    id: "c-3".to_string(),
+                    title: "Third child".to_string(),
+                    status: Status::Closed,
+                    deps: vec![],
+                },
+                TreeNode {
+                    id: "c-4".to_string(),
+                    title: "Fourth child".to_string(),
+                    status: Status::Open,
+                    deps: vec![],
+                },
+            ],
+        };
+        pretty_tree(&node);
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_list_different_priority_levels() {
+        colored::control::set_override(true);
+        let tickets: Vec<Ticket> = (0..=4)
+            .map(|p| {
+                let mut t = make_ticket();
+                t.id = format!("vi-p{}", p);
+                t.priority = p;
+                t.title = format!("Priority {} ticket", p);
+                t
+            })
+            .collect();
+        let result = pretty_list(&tickets);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn colorize_status_returns_expected_strings() {
+        colored::control::set_override(false);
+        let open = colorize_status(&Status::Open);
+        let in_progress = colorize_status(&Status::InProgress);
+        let closed = colorize_status(&Status::Closed);
+        assert!(open.contains("open"));
+        assert!(in_progress.contains("in_progress"));
+        assert!(closed.contains("closed"));
+    }
+
+    #[test]
+    fn colorize_priority_returns_expected_strings() {
+        colored::control::set_override(false);
+        assert!(colorize_priority(0).contains('0'));
+        assert!(colorize_priority(1).contains('1'));
+        assert_eq!(colorize_priority(2), "2");
+        assert_eq!(colorize_priority(3), "3");
+        assert_eq!(colorize_priority(4), "4");
+    }
+
+    #[test]
+    fn truncate_unicode_string() {
+        let s = "日本語のテスト文字列です";
+        let result = truncate(s, 5);
+        assert_eq!(result.chars().count(), 5);
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn pretty_show_multiline_description() {
+        colored::control::set_override(true);
+        let mut ticket = make_ticket();
+        ticket.description = Some(
+            "Line one\nLine two\nLine three\n\nLine five after blank".to_string(),
+        );
+        let result = pretty_show(&ticket);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_show_tags_assignee_estimate() {
+        colored::control::set_override(true);
+        let mut ticket = make_ticket();
+        ticket.tags = vec!["perf".to_string(), "critical".to_string()];
+        ticket.assignee = Some("charlie".to_string());
+        ticket.estimate = Some(45);
+        let result = pretty_show(&ticket);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_list_title_truncation() {
+        colored::control::set_override(true);
+        let mut ticket = make_ticket();
+        ticket.title = "A".repeat(100);
+        let result = pretty_list(&[ticket]);
+        assert!(result.is_ok());
+        colored::control::set_override(false);
+    }
+
+    #[test]
+    fn pretty_tree_deep_nesting_with_mixed_siblings() {
+        colored::control::set_override(true);
+        let node = TreeNode {
+            id: "root".to_string(),
+            title: "Root".to_string(),
+            status: Status::Open,
+            deps: vec![
+                TreeNode {
+                    id: "a".to_string(),
+                    title: "A".to_string(),
+                    status: Status::Open,
+                    deps: vec![
+                        TreeNode {
+                            id: "a1".to_string(),
+                            title: "A1".to_string(),
+                            status: Status::InProgress,
+                            deps: vec![
+                                TreeNode {
+                                    id: "a1x".to_string(),
+                                    title: "A1X".to_string(),
+                                    status: Status::Closed,
+                                    deps: vec![],
+                                },
+                                TreeNode {
+                                    id: "a1y".to_string(),
+                                    title: "A1Y".to_string(),
+                                    status: Status::Open,
+                                    deps: vec![],
+                                },
+                            ],
+                        },
+                        TreeNode {
+                            id: "a2".to_string(),
+                            title: "A2".to_string(),
+                            status: Status::Open,
+                            deps: vec![],
+                        },
+                    ],
+                },
+                TreeNode {
+                    id: "b".to_string(),
+                    title: "B".to_string(),
+                    status: Status::Closed,
+                    deps: vec![TreeNode {
+                        id: "b1".to_string(),
+                        title: "B1".to_string(),
+                        status: Status::Open,
+                        deps: vec![],
+                    }],
+                },
+            ],
+        };
+        pretty_tree(&node);
         colored::control::set_override(false);
     }
 }

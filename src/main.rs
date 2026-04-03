@@ -579,7 +579,7 @@ fn cmd_list(args: cli::FilterArgs, pretty: bool) -> Result<()> {
     if pretty {
         output::pretty_list(&filtered)
     } else {
-        output::output_many(&filtered, &args.pluck, args.count)
+        output::output_many_full(&filtered, &args.pluck, args.count, args.full)
     }
 }
 
@@ -630,7 +630,7 @@ fn cmd_closed(args: cli::ClosedArgs, pretty: bool) -> Result<()> {
     if pretty {
         output::pretty_list(&filtered)
     } else {
-        output::output_many(&filtered, &args.filter.pluck, args.filter.count)
+        output::output_many_full(&filtered, &args.filter.pluck, args.filter.count, args.filter.full)
     }
 }
 
@@ -666,7 +666,7 @@ fn cmd_ready(args: cli::FilterArgs, pretty: bool) -> Result<()> {
     if pretty {
         output::pretty_list(&filtered)
     } else {
-        output::output_many(&filtered, &args.pluck, args.count)
+        output::output_many_full(&filtered, &args.pluck, args.count, args.full)
     }
 }
 
@@ -715,6 +715,12 @@ fn cmd_blocked(args: cli::FilterArgs, pretty: bool) -> Result<()> {
     if let Some(ref fields) = args.pluck {
         output::output_plucked(&values, fields);
     } else {
+        let mut values = values;
+        if !args.full {
+            for v in &mut values {
+                output::strip_heavy_fields(v);
+            }
+        }
         println!("{}", serde_json::Value::Array(values));
     }
 
@@ -2214,6 +2220,7 @@ mod tests {
             limit: None,
             pluck: None,
             count: false,
+            full: false,
         }
     }
 

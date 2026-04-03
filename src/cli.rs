@@ -207,6 +207,10 @@ pub struct FilterArgs {
     /// Print count only
     #[arg(long)]
     pub count: bool,
+
+    /// Output full ticket JSON (include description, design, acceptance, notes, body)
+    #[arg(long)]
+    pub full: bool,
 }
 
 #[derive(Args, Debug)]
@@ -308,4 +312,263 @@ pub struct TreeArgs {
     /// Show full transitive tree
     #[arg(long)]
     pub full: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    // Helper to parse CLI args
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(args)
+    }
+
+    // 1. Valid create with priority 0-4
+    #[test]
+    fn create_valid_priority_values() {
+        for p in 0..=4u8 {
+            let cli = parse(&["vima", "create", "Title", "-p", &p.to_string()]).unwrap();
+            if let Commands::Create(args) = cli.command {
+                assert_eq!(args.priority, Some(p));
+            } else {
+                panic!("Expected Create command");
+            }
+        }
+    }
+
+    // 2. Priority value 255 is accepted at clap level (u8 range), validation is in main.rs
+    #[test]
+    fn create_priority_overflow_rejected() {
+        // Values > 255 overflow u8 and are rejected by clap
+        let result = parse(&["vima", "create", "Title", "-p", "256"]);
+        assert!(result.is_err());
+    }
+
+    // 3. Negative priority rejected (not a valid u8)
+    #[test]
+    fn create_negative_priority_rejected() {
+        let result = parse(&["vima", "create", "Title", "-p", "-1"]);
+        assert!(result.is_err());
+    }
+
+    // 4. Invalid ticket type string rejected by clap ValueEnum
+    #[test]
+    fn create_invalid_ticket_type_rejected() {
+        let result = parse(&["vima", "create", "Title", "-t", "story"]);
+        assert!(result.is_err());
+    }
+
+    // 5. Valid ticket types accepted
+    #[test]
+    fn create_valid_ticket_types() {
+        for t in &["bug", "feature", "task", "epic", "chore"] {
+            let cli = parse(&["vima", "create", "Title", "-t", t]).unwrap();
+            if let Commands::Create(args) = cli.command {
+                assert!(args.ticket_type.is_some());
+            } else {
+                panic!("Expected Create command");
+            }
+        }
+    }
+
+    // 6. Valid estimate values accepted
+    #[test]
+    fn create_valid_estimate() {
+        let cli = parse(&["vima", "create", "Title", "-e", "120"]).unwrap();
+        if let Commands::Create(args) = cli.command {
+            assert_eq!(args.estimate, Some(120));
+        } else {
+            panic!("Expected Create command");
+        }
+    }
+
+    // 7. Invalid estimate (negative) rejected
+    #[test]
+    fn create_negative_estimate_rejected() {
+        let result = parse(&["vima", "create", "Title", "-e", "-5"]);
+        assert!(result.is_err());
+    }
+
+    // 8. --exact flag parsed correctly
+    #[test]
+    fn exact_flag_parsed() {
+        let cli = parse(&["vima", "--exact", "show", "vi-1234"]).unwrap();
+        assert!(cli.exact);
+    }
+
+    // 9. --pretty flag parsed correctly
+    #[test]
+    fn pretty_flag_parsed() {
+        let cli = parse(&["vima", "--pretty", "list"]).unwrap();
+        assert!(cli.pretty);
+    }
+
+    // 10. FilterArgs: --tag, --type, --priority, --assignee, --count, --pluck
+    #[test]
+    fn filter_args_parsed_correctly() {
+        let cli = parse(&[
+            "vima", "list",
+            "--tag", "backend",
+            "--tag", "urgent",
+            "-t", "bug",
+            "-p", "0-2",
+            "-a", "alice",
+            "--count",
+            "--limit", "10",
+        ]).unwrap();
+        if let Commands::List(f) = cli.command {
+            assert_eq!(f.tag, vec!["backend", "urgent"]);
+            assert_eq!(f.ticket_type, Some(TicketType::Bug));
+            assert_eq!(f.priority, Some("0-2".to_string()));
+            assert_eq!(f.assignee, Some("alice".to_string()));
+            assert!(f.count);
+            assert_eq!(f.limit, Some(10));
+        } else {
+            panic!("Expected List command");
+        }
+    }
+
+    // 11. Multiple --dep flags on create
+    #[test]
+    fn create_multiple_deps() {
+        let cli = parse(&[
+            "vima", "create", "Title",
+            "--dep", "vi-0001",
+            "--dep", "vi-0002",
+            "--dep", "vi-0003",
+        ]).unwrap();
+        if let Commands::Create(args) = cli.command {
+            assert_eq!(args.dep, vec!["vi-0001", "vi-0002", "vi-0003"]);
+        } else {
+            panic!("Expected Create command");
+        }
+    }
+
+    // 12. Multiple --blocks flags on create
+    #[test]
+    fn create_multiple_blocks() {
+        let cli = parse(&[
+            "vima", "create", "Title",
+            "--blocks", "vi-0001",
+            "--blocks", "vi-0002",
+        ]).unwrap();
+        if let Commands::Create(args) = cli.command {
+            assert_eq!(args.blocks, vec!["vi-0001", "vi-0002"]);
+        } else {
+            panic!("Expected Create command");
+        }
+    }
+
+    // 13. Subcommand names exist (help text generation)
+    #[test]
+    fn all_subcommands_recognized() {
+        let subcommands = [
+            "create", "show", "list", "ready", "blocked", "closed",
+            "update", "start", "close", "reopen", "is-ready",
+            "add-note", "dep", "undep", "link", "unlink", "init", "help",
+        ];
+        for sub in &subcommands {
+            // Each subcommand without required args should give a usage error, not "unknown subcommand"
+            let result = parse(&["vima", sub]);
+            // Some subcommands need no args (list, ready, blocked, init, help)
+            // Others will fail with missing required arg — but NOT with "unknown subcommand"
+            if let Err(e) = &result {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("unrecognized subcommand"),
+                    "Subcommand '{}' not recognized: {}",
+                    sub,
+                    msg
+                );
+            }
+        }
+    }
+
+    // 14. Invalid status string rejected
+    #[test]
+    fn invalid_status_rejected() {
+        let result = parse(&["vima", "list", "--status", "deleted"]);
+        assert!(result.is_err());
+    }
+
+    // 15. Valid status values accepted
+    #[test]
+    fn valid_status_values() {
+        for s in &["open", "in_progress", "closed"] {
+            let cli = parse(&["vima", "list", "--status", s]).unwrap();
+            if let Commands::List(f) = cli.command {
+                assert!(f.status.is_some());
+            } else {
+                panic!("Expected List command");
+            }
+        }
+    }
+
+    // 16. Dep subcommand: add with --blocks flag
+    #[test]
+    fn dep_add_blocks_flag() {
+        let cli = parse(&["vima", "dep", "add", "vi-0001", "vi-0002", "--blocks"]).unwrap();
+        if let Commands::Dep(dep_args) = cli.command {
+            if let DepCommands::Add(add) = dep_args.command {
+                assert_eq!(add.id, "vi-0001");
+                assert_eq!(add.dep_id, "vi-0002");
+                assert!(add.blocks);
+            } else {
+                panic!("Expected Add subcommand");
+            }
+        } else {
+            panic!("Expected Dep command");
+        }
+    }
+
+    // 17. Close with multiple IDs and reason
+    #[test]
+    fn close_multiple_ids_with_reason() {
+        let cli = parse(&[
+            "vima", "close", "vi-0001", "vi-0002",
+            "--reason", "duplicate",
+        ]).unwrap();
+        if let Commands::Close(args) = cli.command {
+            assert_eq!(args.ids, vec!["vi-0001", "vi-0002"]);
+            assert_eq!(args.reason, Some("duplicate".to_string()));
+        } else {
+            panic!("Expected Close command");
+        }
+    }
+
+    // 18. Show with --pluck
+    #[test]
+    fn show_pluck_field() {
+        let cli = parse(&["vima", "show", "vi-1234", "--pluck", "title"]).unwrap();
+        if let Commands::Show(args) = cli.command {
+            assert_eq!(args.id, "vi-1234");
+            assert_eq!(args.pluck, Some("title".to_string()));
+        } else {
+            panic!("Expected Show command");
+        }
+    }
+
+    // 19. No subcommand gives error
+    #[test]
+    fn no_subcommand_errors() {
+        let result = parse(&["vima"]);
+        assert!(result.is_err());
+    }
+
+    // 20. Tree with --full flag
+    #[test]
+    fn dep_tree_full_flag() {
+        let cli = parse(&["vima", "dep", "tree", "vi-0001", "--full"]).unwrap();
+        if let Commands::Dep(dep_args) = cli.command {
+            if let DepCommands::Tree(tree) = dep_args.command {
+                assert_eq!(tree.id, "vi-0001");
+                assert!(tree.full);
+            } else {
+                panic!("Expected Tree subcommand");
+            }
+        } else {
+            panic!("Expected Dep command");
+        }
+    }
 }
