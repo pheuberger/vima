@@ -24,7 +24,7 @@ pub(crate) fn parse_tags(input: &str) -> Vec<String> {
 fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool) -> Result<()> {
     if let Some(ref json_str) = args.json {
         let obj: serde_json::Value = serde_json::from_str(json_str)
-            .map_err(|e| Error::YamlError(format!("invalid --json: {e}")))?;
+            .map_err(|e| Error::Yaml(format!("invalid --json: {e}")))?;
         let obj = obj
             .as_object()
             .ok_or_else(|| Error::InvalidField("--json must be a JSON object".into()))?;
@@ -99,9 +99,10 @@ fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool) -> Result<(
 
     if let Some(p) = args.priority {
         if p > filter::MAX_PRIORITY {
-            return Err(Error::InvalidField(
-                format!("priority must be 0-{}", filter::MAX_PRIORITY).into(),
-            ));
+            return Err(Error::InvalidField(format!(
+                "priority must be 0-{}",
+                filter::MAX_PRIORITY
+            )));
         }
     }
 
@@ -147,6 +148,7 @@ fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool) -> Result<(
 
     let ticket = ticket::Ticket {
         id: ticket_id.clone(),
+        version: None,
         title,
         status: ticket::Status::Open,
         ticket_type: args.ticket_type.unwrap_or(ticket::TicketType::Task),
@@ -370,7 +372,7 @@ fn cmd_undep(args: cli::UndepArgs, exact: bool) -> Result<()> {
 fn cmd_update(mut args: cli::UpdateArgs, exact: bool, dry_run: bool) -> Result<()> {
     if let Some(ref json_str) = args.json {
         let obj: serde_json::Value = serde_json::from_str(json_str)
-            .map_err(|e| Error::YamlError(format!("invalid --json: {e}")))?;
+            .map_err(|e| Error::Yaml(format!("invalid --json: {e}")))?;
         let obj = obj
             .as_object()
             .ok_or_else(|| Error::InvalidField("--json must be a JSON object".into()))?;
@@ -450,9 +452,10 @@ fn cmd_update(mut args: cli::UpdateArgs, exact: bool, dry_run: bool) -> Result<(
     }
     if let Some(priority) = args.priority {
         if priority > filter::MAX_PRIORITY {
-            return Err(Error::InvalidField(
-                format!("priority must be 0-{}", filter::MAX_PRIORITY).into(),
-            ));
+            return Err(Error::InvalidField(format!(
+                "priority must be 0-{}",
+                filter::MAX_PRIORITY
+            )));
         }
         ticket.priority = priority;
     }
@@ -531,14 +534,58 @@ fn cmd_set_status(
     Ok(())
 }
 
-fn cmd_start(args: cli::IdArgs, exact: bool, dry_run: bool) -> Result<()> {
-    cmd_set_status(
-        &args.id,
-        exact,
-        ticket::Status::InProgress,
-        "Started",
-        dry_run,
-    )
+fn cmd_start(args: cli::StartArgs, exact: bool, dry_run: bool) -> Result<()> {
+    let st = store::Store::open()?;
+    let resolved = st.resolve_id(&args.id, exact)?;
+    let mut ticket = st.read_ticket(&resolved)?;
+
+    // Claim check: if ticket is already in_progress with an assignee
+    if ticket.status == ticket::Status::InProgress {
+        if let Some(ref current) = ticket.assignee {
+            match &args.assignee {
+                Some(new) if new == current => {
+                    // Idempotent: same assignee, already started
+                    let current_ticket = st.load_and_compute(&resolved)?;
+                    output::output_one(&current_ticket, &None)?;
+                    return Ok(());
+                }
+                _ => {
+                    return Err(Error::AlreadyClaimed {
+                        id: resolved,
+                        current_assignee: current.clone(),
+                    });
+                }
+            }
+        }
+        // No current assignee — if no new assignee either, idempotent no-op
+        if args.assignee.is_none() {
+            let current_ticket = st.load_and_compute(&resolved)?;
+            output::output_one(&current_ticket, &None)?;
+            return Ok(());
+        }
+    }
+
+    ticket.status = ticket::Status::InProgress;
+    if let Some(ref assignee) = args.assignee {
+        ticket.assignee = Some(assignee.clone());
+    }
+
+    if dry_run {
+        let preview = serde_json::json!({
+            "dry_run": true,
+            "action": "started",
+            "ticket": serde_json::to_value(&ticket)?,
+        });
+        println!("{}", serde_json::to_string_pretty(&preview)?);
+        return Ok(());
+    }
+
+    st.write_ticket(&ticket)?;
+    let updated = st.load_and_compute(&resolved)?;
+    eprintln!("Started {}", resolved);
+    output::output_one(&updated, &None)?;
+
+    Ok(())
 }
 
 fn cmd_close(args: cli::CloseArgs, exact: bool, dry_run: bool) -> Result<()> {
@@ -816,7 +863,9 @@ fn help_json() -> serde_json::Value {
             "1": "general error (invalid_field, io_error, yaml_error, etc.)",
             "2": "cycle detected or ticket blocked (is-ready, dep cycle)",
             "3": "not found or ambiguous ID (not_found, ambiguous_id)",
-            "4": "conflict (id_exists)"
+            "4": "conflict (id_exists)",
+            "5": "stale (concurrent modification detected — re-read and retry)",
+            "6": "already claimed (ticket in_progress with different assignee)"
         },
         "commands": commands,
     });
@@ -2428,7 +2477,14 @@ mod tests {
         std::env::remove_var("VIMA_DIR");
     }
 
-    fn start_args(id: &str) -> cli::IdArgs {
+    fn start_args(id: &str) -> cli::StartArgs {
+        cli::StartArgs {
+            id: id.to_string(),
+            assignee: None,
+        }
+    }
+
+    fn id_args(id: &str) -> cli::IdArgs {
         cli::IdArgs { id: id.to_string() }
     }
 
@@ -2475,6 +2531,294 @@ mod tests {
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("st-02").unwrap();
         assert_eq!(ticket.status, ticket::Status::InProgress);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn start_with_assignee_sets_both_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Claim test"));
+        ca.id = Some("st-03".to_string());
+        cmd_create(ca, true, false).unwrap();
+
+        let mut sa = start_args("st-03");
+        sa.assignee = Some("agent-1".to_string());
+        cmd_start(sa, true, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("st-03").unwrap();
+        assert_eq!(ticket.status, ticket::Status::InProgress);
+        assert_eq!(ticket.assignee, Some("agent-1".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn start_same_assignee_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Idempotent claim"));
+        ca.id = Some("st-04".to_string());
+        cmd_create(ca, true, false).unwrap();
+
+        let mut sa = start_args("st-04");
+        sa.assignee = Some("agent-1".to_string());
+        cmd_start(sa, true, false).unwrap();
+
+        // Same assignee, second start — should succeed
+        let mut sa2 = start_args("st-04");
+        sa2.assignee = Some("agent-1".to_string());
+        let result = cmd_start(sa2, true, false);
+        assert!(
+            result.is_ok(),
+            "same assignee re-start should succeed: {:?}",
+            result
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn start_different_assignee_returns_already_claimed() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Contested claim"));
+        ca.id = Some("st-05".to_string());
+        cmd_create(ca, true, false).unwrap();
+
+        let mut sa = start_args("st-05");
+        sa.assignee = Some("agent-1".to_string());
+        cmd_start(sa, true, false).unwrap();
+
+        // Different assignee — should fail
+        let mut sa2 = start_args("st-05");
+        sa2.assignee = Some("agent-2".to_string());
+        let err = cmd_start(sa2, true, false).unwrap_err();
+        assert!(
+            matches!(err, error::Error::AlreadyClaimed { .. }),
+            "expected AlreadyClaimed, got: {:?}",
+            err
+        );
+        assert_eq!(err.exit_code(), 6);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn start_no_assignee_on_claimed_ticket_returns_already_claimed() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Claimed no assignee"));
+        ca.id = Some("st-06".to_string());
+        cmd_create(ca, true, false).unwrap();
+
+        let mut sa = start_args("st-06");
+        sa.assignee = Some("agent-1".to_string());
+        cmd_start(sa, true, false).unwrap();
+
+        // No assignee — should fail (ticket is claimed)
+        let sa2 = start_args("st-06");
+        let err = cmd_start(sa2, true, false).unwrap_err();
+        assert!(
+            matches!(err, error::Error::AlreadyClaimed { .. }),
+            "expected AlreadyClaimed, got: {:?}",
+            err
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn start_no_assignee_on_unclaimed_in_progress_is_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Unclaimed noop"));
+        ca.id = Some("st-07".to_string());
+        cmd_create(ca, true, false).unwrap();
+
+        // Start without assignee
+        cmd_start(start_args("st-07"), true, false).unwrap();
+
+        // Start again without assignee — should be noop
+        let result = cmd_start(start_args("st-07"), true, false);
+        assert!(
+            result.is_ok(),
+            "unclaimed re-start should succeed: {:?}",
+            result
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn start_assignee_on_open_ticket_claims_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Open claim"));
+        ca.id = Some("st-08".to_string());
+        cmd_create(ca, true, false).unwrap();
+
+        let mut sa = start_args("st-08");
+        sa.assignee = Some("agent-1".to_string());
+        cmd_start(sa, true, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("st-08").unwrap();
+        assert_eq!(ticket.status, ticket::Status::InProgress);
+        assert_eq!(ticket.assignee, Some("agent-1".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn start_dry_run_with_assignee_does_not_persist() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Dry start"));
+        ca.id = Some("st-09".to_string());
+        cmd_create(ca, true, false).unwrap();
+
+        let mut sa = start_args("st-09");
+        sa.assignee = Some("agent-1".to_string());
+        cmd_start(sa, true, true).unwrap(); // dry_run=true
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("st-09").unwrap();
+        assert_eq!(
+            ticket.status,
+            ticket::Status::Open,
+            "dry-run start should not persist status"
+        );
+        assert_eq!(
+            ticket.assignee, None,
+            "dry-run start should not persist assignee"
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_then_show_includes_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Version show test"));
+        ca.id = Some("vs-01".to_string());
+        cmd_create(ca, true, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("vs-01").unwrap();
+        assert!(
+            ticket.version.is_some(),
+            "created ticket should have a version"
+        );
+        let v = ticket.version.unwrap();
+        assert_eq!(v.len(), 16, "version should be 16 hex chars");
+
+        // Verify version appears in JSON serialization (what show outputs)
+        let computed = st.load_and_compute("vs-01").unwrap();
+        let json_val = serde_json::to_value(&computed).unwrap();
+        assert!(
+            json_val.get("version").is_some(),
+            "version should appear in JSON output"
+        );
+        assert_eq!(json_val["version"].as_str().unwrap().len(), 16);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn stale_write_returns_exit_code_5_integration() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Stale integration"));
+        ca.id = Some("stl-01".to_string());
+        cmd_create(ca, true, false).unwrap();
+
+        // Simulate two agents: both read the same ticket
+        let st = store::Store::open().unwrap();
+        let mut agent_a = st.read_ticket("stl-01").unwrap();
+        let mut agent_b = st.read_ticket("stl-01").unwrap();
+
+        // Agent A writes first — succeeds
+        agent_a.title = "Agent A wins".to_string();
+        st.write_ticket(&agent_a).unwrap();
+
+        // Agent B tries to write with the old version — should fail with exit 5
+        agent_b.title = "Agent B loses".to_string();
+        let err = st.write_ticket(&agent_b).unwrap_err();
+        assert!(
+            matches!(err, error::Error::Stale { .. }),
+            "expected Stale error, got: {:?}",
+            err
+        );
+        assert_eq!(err.exit_code(), 5);
+
+        // Verify Agent A's change persisted
+        let final_ticket = st.read_ticket("stl-01").unwrap();
+        assert_eq!(final_ticket.title, "Agent A wins");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn legacy_ticket_first_update_adds_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        // Write a legacy ticket file directly (no version field)
+        let legacy_content = r#"---
+id: leg-01
+title: Legacy ticket
+status: open
+type: task
+priority: 2
+tags: []
+deps: []
+links: []
+created: "2026-04-02T00:00:00Z"
+notes: []
+---
+"#;
+        std::fs::write(tmp.path().join(".vima/tickets/leg-01.md"), legacy_content).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("leg-01").unwrap();
+        assert!(
+            ticket.version.is_none(),
+            "legacy ticket should have no version"
+        );
+
+        // Update via command
+        let mut ua = update_args("leg-01");
+        ua.title = Some("Updated legacy".to_string());
+        cmd_update(ua, true, false).unwrap();
+
+        let updated = st.read_ticket("leg-01").unwrap();
+        assert!(
+            updated.version.is_some(),
+            "version should be added after first update"
+        );
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -2585,7 +2929,7 @@ mod tests {
         cmd_create(ca, false, false).unwrap();
 
         cmd_close(close_args(vec!["ro-01"]), true, false).unwrap();
-        cmd_reopen(start_args("ro-01"), true, false).unwrap();
+        cmd_reopen(id_args("ro-01"), true, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("ro-01").unwrap();
@@ -2604,7 +2948,7 @@ mod tests {
         ca.id = Some("ro-02".to_string());
         cmd_create(ca, false, false).unwrap();
 
-        let result = cmd_reopen(start_args("ro-02"), true, false);
+        let result = cmd_reopen(id_args("ro-02"), true, false);
         assert!(
             result.is_ok(),
             "reopen of open ticket should succeed: {:?}",
@@ -2629,7 +2973,7 @@ mod tests {
         cmd_create(ca, false, false).unwrap();
 
         cmd_start(start_args("ro-03"), true, false).unwrap();
-        cmd_reopen(start_args("ro-03"), true, false).unwrap();
+        cmd_reopen(id_args("ro-03"), true, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("ro-03").unwrap();
@@ -3724,6 +4068,29 @@ mod tests {
                 arg["required"].is_boolean(),
                 "arg {} missing 'required' field",
                 arg["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn help_json_exit_codes_include_stale_and_claimed() {
+        let json = help_json();
+        let exit_codes = json["exit_codes"].as_object().unwrap();
+        assert!(
+            exit_codes.contains_key("5"),
+            "exit_codes should contain code 5 (stale)"
+        );
+        assert!(
+            exit_codes.contains_key("6"),
+            "exit_codes should contain code 6 (already_claimed)"
+        );
+        assert!(exit_codes["5"].as_str().unwrap().contains("stale"));
+        assert!(exit_codes["6"].as_str().unwrap().contains("claimed"));
+        // Verify all 7 exit codes are present (0-6)
+        for code in 0..=6 {
+            assert!(
+                exit_codes.contains_key(&code.to_string()),
+                "exit_codes missing code {code}"
             );
         }
     }

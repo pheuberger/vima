@@ -42,7 +42,7 @@ pub enum Commands {
     /// Update a ticket
     Update(UpdateArgs),
     /// Start work on a ticket (set status to in_progress)
-    Start(IdArgs),
+    Start(StartArgs),
     /// Close a ticket
     Close(CloseArgs),
     /// Reopen a closed ticket
@@ -233,6 +233,16 @@ pub struct FilterArgs {
 pub struct IdArgs {
     /// Ticket ID
     pub id: String,
+}
+
+#[derive(Args, Debug)]
+pub struct StartArgs {
+    /// Ticket ID
+    pub id: String,
+
+    /// Claim the ticket for this assignee (fails if already claimed by another)
+    #[arg(short = 'a', long)]
+    pub assignee: Option<String>,
 }
 
 #[derive(Args, Debug)]
