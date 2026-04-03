@@ -35,7 +35,7 @@ vima is built for AI agents as the primary user. Every design decision optimizes
 
 - Default output should be JSON, parseable by `jq`
 - Add `--pluck` and `--count` support to any list-like command
-- Use semantic exit codes: 0=success, 1=error, 2=cycle/blocked
+- Use semantic exit codes: 0=success, 1=general error, 2=cycle/blocked, 3=not found/ambiguous, 4=conflict (id_exists)
 - Include the command in `help --json` schema automatically
 - Write error types in `error.rs` with structured fields, not just messages
 - Consider: "Can an agent use this without reading documentation first?"
@@ -53,7 +53,7 @@ Use **semantic commit messages**: `type: short description`. Common prefixes: `f
 ```bash
 cargo build                          # debug build
 cargo build --release                # release build (stripped, LTO)
-cargo test                           # run all tests (~223 tests)
+cargo test                           # run all tests
 cargo test <test_name>               # run a single test by name
 cargo test --lib store               # run tests in a specific module
 cargo fmt                            # format code
@@ -64,7 +64,7 @@ CI runs: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.
 
 ## Architecture
 
-**Entry point**: `src/main.rs` — CLI dispatcher that routes commands to handler functions. All command logic lives here (~3100 lines).
+**Entry point**: `src/main.rs` — CLI dispatcher that routes commands to handler functions. All command logic lives here.
 
 **Core modules**:
 - `cli.rs` — Clap derive-based argument parsing for all commands
@@ -75,7 +75,7 @@ CI runs: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.
 - `filter.rs` — Filtering (tags OR, priority range, status, type, assignee) and sorting
 - `batch.rs` — Batch create from JSON with back-references (`$1`, `$2`, etc.)
 - `output.rs` — JSON formatting, `--pluck` field extraction, `--count`, `--pretty` colored output
-- `error.rs` — Structured error types with JSON serialization and exit codes (0=ok, 1=error, 2=cycle/blocked)
+- `error.rs` — Structured error types with JSON serialization and semantic exit codes (0=ok, 1=general error, 2=cycle/blocked, 3=not found/ambiguous, 4=conflict)
 - `plugin.rs` — Discovers `vima-{name}` executables on PATH, passes context via env vars
 
 **Key patterns**:
@@ -94,48 +94,13 @@ CI runs: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.
 
 ## Using vima (this project's tracker)
 
-Run `vima help --json` for the full command schema.
+Run `vima help --json` for the full command schema — it always reflects the installed version.
 
-```bash
-vima create "Title" [-t task|bug|feature] [-p 0-4] [--dep ID] [--tags foo,bar]
-vima list [--tag foo] [--type bug] [--priority 0-2]
-vima ready                    # tickets with no open deps
-vima show ID
-vima update ID --title "..." --description "..."
-vima close ID [--reason "..."]
-vima start ID                 # set status → in_progress
-```
-
-**Context-efficient output** (minimize tokens consumed by agent):
-```bash
-vima list --pluck id          # IDs only — use this to check what exists
-vima list --pluck id,title    # minimal summary
-vima list --count             # just the count, no records
-vima show ID --pluck status   # single field from single ticket
-vima list --full              # include heavy fields only when needed
-```
-
-**Dependencies**:
-```bash
-vima dep add ID DEP_ID        # ID depends on DEP_ID
-vima dep add ID DEP_ID --blocks  # ID blocks DEP_ID
-vima is-ready ID              # exits 0 if ready, 2 if blocked
-```
-
-**Batch create with back-references**:
-```bash
-vima create --batch <<'EOF'
-[
-  {"title": "Task A", "id": "a"},
-  {"title": "Task B", "dep": ["a"]}
-]
-EOF
-```
-
-**Automation tips**:
-- Set `VIMA_EXACT=1` (or `--exact`) to disable partial ID matching
-- All commands exit 0 on success, non-zero on error
+**Non-obvious tips**:
+- `--pluck` and `--count` minimize output tokens — use aggressively
+- `--full` opts into heavy fields (description, notes, body) excluded from list output by default
+- `--dry-run` (global flag) previews any mutation without persisting
+- `VIMA_EXACT=1` (or `--exact`) disables fuzzy ID matching — use in automation
+- `is-ready ID` exits 0 if ready, 2 if blocked — branch on exit code, don't parse
+- Batch create (`--batch`) supports `$1`, `$2` back-references for building dependency graphs atomically
 - Errors are JSON on stderr with `error`, `message`, and context fields
-- Use `--pluck` aggressively to minimize output tokens
-- Pipe `--pluck id` output to subsequent commands for workflows
-- Use `--count` instead of piping to `wc -l`
