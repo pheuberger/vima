@@ -1057,4 +1057,68 @@ created: "2026-04-02T00:00:00Z"
             err
         );
     }
+
+    // ── add_dep tests ───────────────────────────────────────────────────────
+
+    fn write_minimal_ticket(tickets_dir: &Path, id: &str) {
+        let content = format!(
+            "---\nid: {id}\ntitle: Ticket {id}\nstatus: open\ntype: task\npriority: 2\ntags: []\ncreated: \"2025-01-01T00:00:00Z\"\n---\n"
+        );
+        fs::write(tickets_dir.join(format!("{id}.md")), content).unwrap();
+    }
+
+    #[test]
+    #[serial(env)]
+    fn add_dep_appends_dep_to_ticket() {
+        let (_tmp, store, tickets_dir) = make_store();
+        write_minimal_ticket(&tickets_dir, "ad-a");
+        write_minimal_ticket(&tickets_dir, "ad-b");
+
+        store.add_dep("ad-a", "ad-b").unwrap();
+
+        let ticket = store.read_ticket("ad-a").unwrap();
+        assert!(ticket.deps.contains(&"ad-b".to_string()));
+    }
+
+    #[test]
+    #[serial(env)]
+    fn add_dep_idempotent_no_duplicate() {
+        let (_tmp, store, tickets_dir) = make_store();
+        write_minimal_ticket(&tickets_dir, "ad-c");
+        write_minimal_ticket(&tickets_dir, "ad-d");
+
+        store.add_dep("ad-c", "ad-d").unwrap();
+        store.add_dep("ad-c", "ad-d").unwrap();
+
+        let ticket = store.read_ticket("ad-c").unwrap();
+        let count = ticket.deps.iter().filter(|d| *d == "ad-d").count();
+        assert_eq!(count, 1, "dep should appear exactly once");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn add_dep_nonexistent_ticket_returns_error() {
+        let (_tmp, store, tickets_dir) = make_store();
+        write_minimal_ticket(&tickets_dir, "ad-e");
+
+        let result = store.add_dep("no-such", "ad-e");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[serial(env)]
+    fn add_dep_multiple_deps() {
+        let (_tmp, store, tickets_dir) = make_store();
+        write_minimal_ticket(&tickets_dir, "ad-f");
+        write_minimal_ticket(&tickets_dir, "ad-g");
+        write_minimal_ticket(&tickets_dir, "ad-h");
+
+        store.add_dep("ad-f", "ad-g").unwrap();
+        store.add_dep("ad-f", "ad-h").unwrap();
+
+        let ticket = store.read_ticket("ad-f").unwrap();
+        assert_eq!(ticket.deps.len(), 2);
+        assert!(ticket.deps.contains(&"ad-g".to_string()));
+        assert!(ticket.deps.contains(&"ad-h".to_string()));
+    }
 }

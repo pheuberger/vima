@@ -180,4 +180,60 @@ mod tests {
         assert_eq!(json["matches"], serde_json::json!(["a", "b"]));
         assert_eq!(json["error"], "ambiguous_id");
     }
+
+    // ── Display trait tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn display_not_found() {
+        let err = Error::NotFound("abc-1234".into());
+        assert_eq!(err.to_string(), "ticket not found: abc-1234");
+    }
+
+    #[test]
+    fn display_ambiguous_id() {
+        let err = Error::AmbiguousId("ab".into(), vec!["ab-001".into(), "ab-002".into()]);
+        assert_eq!(err.to_string(), "ambiguous id 'ab': matches ab-001, ab-002");
+    }
+
+    #[test]
+    fn display_cycle() {
+        let err = Error::Cycle(vec!["a".into(), "b".into(), "c".into(), "a".into()]);
+        assert_eq!(err.to_string(), "dependency cycle detected: a -> b -> c -> a");
+    }
+
+    #[test]
+    fn display_invalid_backref() {
+        let err = Error::InvalidBackref("$99".into());
+        assert_eq!(err.to_string(), "invalid batch back-reference: $99");
+    }
+
+    #[test]
+    fn display_id_exists() {
+        let err = Error::IdExists("vi-abcd".into());
+        assert_eq!(err.to_string(), "ticket id already exists: vi-abcd");
+    }
+
+    #[test]
+    fn display_invalid_field() {
+        let err = Error::InvalidField("priority must be 0-4".into());
+        assert_eq!(err.to_string(), "invalid field: priority must be 0-4");
+    }
+
+    #[test]
+    fn display_no_vima_dir() {
+        let err = Error::NoVimaDir;
+        assert_eq!(err.to_string(), "no .vima/ directory found");
+    }
+
+    #[test]
+    fn display_yaml_error() {
+        let err = Error::YamlError("unexpected token".into());
+        assert_eq!(err.to_string(), "yaml parse error: unexpected token");
+    }
+
+    #[test]
+    fn display_io_error() {
+        let err = Error::IoError(std::io::Error::new(std::io::ErrorKind::NotFound, "file missing"));
+        assert_eq!(err.to_string(), "io error: file missing");
+    }
 }

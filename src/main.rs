@@ -3124,4 +3124,469 @@ mod tests {
 
         std::env::remove_var("VIMA_DIR");
     }
+
+    // ── parse_tags tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_tags_basic_comma_separated() {
+        assert_eq!(parse_tags("a,b,c"), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn parse_tags_empty_string_returns_empty() {
+        let result: Vec<String> = parse_tags("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_tags_whitespace_around_commas() {
+        assert_eq!(parse_tags(" a , b , c "), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn parse_tags_trailing_comma_ignored() {
+        assert_eq!(parse_tags("a,b,"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn parse_tags_leading_comma_ignored() {
+        assert_eq!(parse_tags(",a,b"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn parse_tags_multiple_commas_ignored() {
+        assert_eq!(parse_tags("a,,b,,,c"), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn parse_tags_single_tag_no_comma() {
+        assert_eq!(parse_tags("solo"), vec!["solo"]);
+    }
+
+    #[test]
+    fn parse_tags_whitespace_only_returns_empty() {
+        let result: Vec<String> = parse_tags("  ,  ,  ");
+        assert!(result.is_empty());
+    }
+
+    // ── help / help_json tests ──────────────────────────────────────────────
+
+    #[test]
+    fn help_json_returns_valid_structure() {
+        let json = help_json();
+        assert_eq!(json["name"], "vima");
+        assert!(json["about"].is_string());
+        assert!(json["commands"].is_array());
+        assert!(json["global_flags"].is_array());
+        assert!(json["exit_codes"].is_object());
+    }
+
+    #[test]
+    fn help_json_contains_all_subcommands() {
+        let json = help_json();
+        let commands = json["commands"].as_array().unwrap();
+        let names: Vec<&str> = commands.iter().map(|c| c["name"].as_str().unwrap()).collect();
+
+        // All built-in commands must be present
+        for expected in &[
+            "create", "show", "list", "ready", "blocked", "closed",
+            "update", "start", "close", "reopen", "is-ready",
+            "add-note", "dep", "undep", "link", "unlink", "init", "help",
+        ] {
+            assert!(names.contains(expected), "missing command: {expected}");
+        }
+    }
+
+    #[test]
+    fn help_json_create_has_expected_args() {
+        let json = help_json();
+        let commands = json["commands"].as_array().unwrap();
+        let create = commands.iter().find(|c| c["name"] == "create").unwrap();
+        let args = create["args"].as_array().unwrap();
+        let arg_names: Vec<&str> = args.iter().map(|a| a["name"].as_str().unwrap()).collect();
+
+        assert!(arg_names.contains(&"title"));
+        assert!(arg_names.contains(&"priority"));
+        assert!(arg_names.contains(&"tags"));
+    }
+
+    #[test]
+    fn help_json_dep_has_subcommands() {
+        let json = help_json();
+        let commands = json["commands"].as_array().unwrap();
+        let dep = commands.iter().find(|c| c["name"] == "dep").unwrap();
+        let subs = dep["subcommands"].as_array().unwrap();
+        let sub_names: Vec<&str> = subs.iter().map(|s| s["name"].as_str().unwrap()).collect();
+
+        assert!(sub_names.contains(&"add"));
+        assert!(sub_names.contains(&"tree"));
+        assert!(sub_names.contains(&"cycle"));
+    }
+
+    #[test]
+    fn help_json_args_have_required_field() {
+        let json = help_json();
+        let commands = json["commands"].as_array().unwrap();
+        let create = commands.iter().find(|c| c["name"] == "create").unwrap();
+        let args = create["args"].as_array().unwrap();
+        for arg in args {
+            assert!(
+                arg["required"].is_boolean(),
+                "arg {} missing 'required' field",
+                arg["name"]
+            );
+        }
+    }
+
+    #[test]
+    #[serial(env)]
+    fn cmd_help_json_succeeds() {
+        // cmd_help with json=true writes to stdout; just verify it doesn't error
+        let result = cmd_help(cli::HelpArgs { command: None, json: true });
+        assert!(result.is_ok(), "cmd_help --json failed: {:?}", result);
+    }
+
+    // ── cmd_update missing field tests ──────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn update_design_set_and_clear() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Design test"));
+        ca.id = Some("upd-dsg".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut ua = update_args("upd-dsg");
+        ua.design = Some("Some design notes".to_string());
+        cmd_update(ua, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("upd-dsg").unwrap();
+        assert_eq!(ticket.design, Some("Some design notes".to_string()));
+
+        let mut ua2 = update_args("upd-dsg");
+        ua2.design = Some("".to_string());
+        cmd_update(ua2, true).unwrap();
+
+        let ticket2 = st.read_ticket("upd-dsg").unwrap();
+        assert_eq!(ticket2.design, None);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_acceptance_set_and_clear() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Acceptance test"));
+        ca.id = Some("upd-acc".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut ua = update_args("upd-acc");
+        ua.acceptance = Some("Passes all tests".to_string());
+        cmd_update(ua, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("upd-acc").unwrap();
+        assert_eq!(ticket.acceptance, Some("Passes all tests".to_string()));
+
+        let mut ua2 = update_args("upd-acc");
+        ua2.acceptance = Some("".to_string());
+        cmd_update(ua2, true).unwrap();
+
+        let ticket2 = st.read_ticket("upd-acc").unwrap();
+        assert_eq!(ticket2.acceptance, None);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_estimate_sets_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Estimate test"));
+        ca.id = Some("upd-est".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let mut ua = update_args("upd-est");
+        ua.estimate = Some(120);
+        cmd_update(ua, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("upd-est").unwrap();
+        assert_eq!(ticket.estimate, Some(120));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_ticket_type_changes_type() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Type test"));
+        ca.id = Some("upd-typ".to_string());
+        cmd_create(ca, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("upd-typ").unwrap();
+        assert_eq!(ticket.ticket_type, ticket::TicketType::Task);
+
+        let mut ua = update_args("upd-typ");
+        ua.ticket_type = Some(ticket::TicketType::Bug);
+        cmd_update(ua, true).unwrap();
+
+        let ticket2 = st.read_ticket("upd-typ").unwrap();
+        assert_eq!(ticket2.ticket_type, ticket::TicketType::Bug);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn update_nonexistent_ticket_returns_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let ua = update_args("no-such-id");
+        let result = cmd_update(ua, true);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), "not_found");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── cmd_create missing field tests ──────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn create_with_parent_populates_parent_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut parent = create_args(Some("Parent ticket"));
+        parent.id = Some("cr-par".to_string());
+        cmd_create(parent, true).unwrap();
+
+        let mut child = create_args(Some("Child ticket"));
+        child.id = Some("cr-chi".to_string());
+        child.parent = Some("cr-par".to_string());
+        cmd_create(child, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("cr-chi").unwrap();
+        assert_eq!(ticket.parent, Some("cr-par".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_with_design_and_acceptance() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Full ticket"));
+        ca.id = Some("cr-full".to_string());
+        ca.design = Some("Design notes here".to_string());
+        ca.acceptance = Some("All tests pass".to_string());
+        cmd_create(ca, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("cr-full").unwrap();
+        assert_eq!(ticket.design, Some("Design notes here".to_string()));
+        assert_eq!(ticket.acceptance, Some("All tests pass".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_with_estimate_populates_estimate() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Estimated ticket"));
+        ca.id = Some("cr-est".to_string());
+        ca.estimate = Some(60);
+        cmd_create(ca, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("cr-est").unwrap();
+        assert_eq!(ticket.estimate, Some(60));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_with_explicit_type() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Feature ticket"));
+        ca.id = Some("cr-feat".to_string());
+        ca.ticket_type = Some(ticket::TicketType::Feature);
+        cmd_create(ca, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("cr-feat").unwrap();
+        assert_eq!(ticket.ticket_type, ticket::TicketType::Feature);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_with_assignee() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Assigned ticket"));
+        ca.id = Some("cr-asgn".to_string());
+        ca.assignee = Some("alice".to_string());
+        cmd_create(ca, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("cr-asgn").unwrap();
+        assert_eq!(ticket.assignee, Some("alice".to_string()));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── cmd_closed additional tests ─────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn closed_no_closed_tickets_returns_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Open ticket"));
+        ca.id = Some("cls-open".to_string());
+        cmd_create(ca, true).unwrap();
+
+        let result = closed_collect(&closed_args_default()).unwrap();
+        assert!(result.is_empty());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn closed_with_tag_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Tagged closed"));
+        a.id = Some("cls-tg-a".to_string());
+        a.tags = Some("urgent".to_string());
+        cmd_create(a, true).unwrap();
+        cmd_close(cli::CloseArgs { ids: vec!["cls-tg-a".to_string()], reason: None }, true).unwrap();
+
+        let mut b = create_args(Some("Untagged closed"));
+        b.id = Some("cls-tg-b".to_string());
+        cmd_create(b, true).unwrap();
+        cmd_close(cli::CloseArgs { ids: vec!["cls-tg-b".to_string()], reason: None }, true).unwrap();
+
+        let mut args = closed_args_default();
+        args.filter.tag = vec!["urgent".to_string()];
+        let result = closed_collect(&args).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "cls-tg-a");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    // ── cmd_blocked additional tests ────────────────────────────────────────
+
+    #[test]
+    #[serial(env)]
+    fn blocked_mixed_deps_some_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut dep1 = create_args(Some("Dep 1"));
+        dep1.id = Some("blk-d1".to_string());
+        cmd_create(dep1, true).unwrap();
+
+        let mut dep2 = create_args(Some("Dep 2"));
+        dep2.id = Some("blk-d2".to_string());
+        cmd_create(dep2, true).unwrap();
+
+        let mut blocked = create_args(Some("Blocked ticket"));
+        blocked.id = Some("blk-main".to_string());
+        blocked.dep = vec!["blk-d1".to_string(), "blk-d2".to_string()];
+        cmd_create(blocked, true).unwrap();
+
+        // Close one dep — ticket should still be blocked
+        cmd_close(cli::CloseArgs { ids: vec!["blk-d1".to_string()], reason: None }, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let closed_ids = closed_id_set(&tickets);
+
+        let still_blocked: Vec<&ticket::Ticket> = tickets
+            .iter()
+            .filter(|t| {
+                t.status != ticket::Status::Closed
+                    && t.deps.iter().any(|d| !closed_ids.contains(d))
+            })
+            .collect();
+        assert_eq!(still_blocked.len(), 1);
+        assert_eq!(still_blocked[0].id, "blk-main");
+
+        // Close second dep — ticket should no longer be blocked
+        cmd_close(cli::CloseArgs { ids: vec!["blk-d2".to_string()], reason: None }, true).unwrap();
+
+        let mut tickets2 = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets2);
+        let closed_ids2 = closed_id_set(&tickets2);
+
+        let still_blocked2: Vec<&ticket::Ticket> = tickets2
+            .iter()
+            .filter(|t| {
+                t.status != ticket::Status::Closed
+                    && t.deps.iter().any(|d| !closed_ids2.contains(d))
+            })
+            .collect();
+        assert!(still_blocked2.is_empty());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn blocked_empty_when_no_deps() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("No deps"));
+        a.id = Some("blk-none".to_string());
+        cmd_create(a, true).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let mut tickets = st.read_all().unwrap();
+        deps::compute_reverse_fields(&mut tickets);
+        let closed_ids = closed_id_set(&tickets);
+
+        let blocked: Vec<&ticket::Ticket> = tickets
+            .iter()
+            .filter(|t| {
+                t.status != ticket::Status::Closed
+                    && t.deps.iter().any(|d| !closed_ids.contains(d))
+            })
+            .collect();
+        assert!(blocked.is_empty());
+
+        std::env::remove_var("VIMA_DIR");
+    }
 }
