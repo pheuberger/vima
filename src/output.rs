@@ -37,14 +37,15 @@ pub fn output_many(tickets: &[Ticket], pluck: &Option<String>, count: bool) -> R
     output_many_full(tickets, pluck, count, false)
 }
 
-pub fn output_many_full(
+pub(crate) fn output_many_full_to_writer<W: std::io::Write>(
     tickets: &[Ticket],
     pluck: &Option<String>,
     count: bool,
     full: bool,
+    w: &mut W,
 ) -> Result<()> {
     if count {
-        println!("{}", tickets.len());
+        writeln!(w, "{}", tickets.len())?;
         return Ok(());
     }
     let mut values: Vec<serde_json::Value> = tickets
@@ -57,11 +58,20 @@ pub fn output_many_full(
         }
     }
     if let Some(fields) = pluck {
-        output_plucked(&values, fields);
+        output_plucked_to_writer(&values, fields, w)?;
     } else {
-        println!("{}", serde_json::Value::Array(values));
+        writeln!(w, "{}", serde_json::Value::Array(values))?;
     }
     Ok(())
+}
+
+pub fn output_many_full(
+    tickets: &[Ticket],
+    pluck: &Option<String>,
+    count: bool,
+    full: bool,
+) -> Result<()> {
+    output_many_full_to_writer(tickets, pluck, count, full, &mut std::io::stdout())
 }
 
 pub fn pluck_value(value: &serde_json::Value, fields: &str) -> serde_json::Value {
@@ -78,6 +88,16 @@ pub fn pluck_value(value: &serde_json::Value, fields: &str) -> serde_json::Value
         }
         serde_json::Value::Object(obj)
     }
+}
+
+fn output_plucked_to_writer<W: std::io::Write>(
+    values: &[serde_json::Value],
+    fields: &str,
+    w: &mut W,
+) -> Result<()> {
+    let result: Vec<serde_json::Value> = values.iter().map(|v| pluck_value(v, fields)).collect();
+    writeln!(w, "{}", serde_json::Value::Array(result))?;
+    Ok(())
 }
 
 pub fn output_plucked(values: &[serde_json::Value], fields: &str) {

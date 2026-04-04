@@ -1257,6 +1257,63 @@ mod tests {
         output::output_one_to_writer(&ticket, &args.pluck, w)
     }
 
+    /// Mirror of cmd_list that writes output to an arbitrary writer.
+    fn cmd_list_to_writer<W: std::io::Write>(
+        args: cli::FilterArgs,
+        w: &mut W,
+    ) -> Result<()> {
+        let st = store::Store::open()?;
+        let mut tickets = st.read_all()?;
+        deps::compute_reverse_fields(&mut tickets);
+        let filter = filter::Filter::from_args(&args)?;
+        let filtered = filter::apply_filters(tickets, &filter);
+        output::output_many_full_to_writer(&filtered, &args.pluck, args.count, args.full, w)
+    }
+
+    /// Mirror of cmd_ready that writes output to an arbitrary writer.
+    fn cmd_ready_to_writer<W: std::io::Write>(
+        args: cli::FilterArgs,
+        w: &mut W,
+    ) -> Result<()> {
+        let st = store::Store::open()?;
+        let mut tickets = st.read_all()?;
+        deps::compute_reverse_fields(&mut tickets);
+        let closed_ids = closed_id_set(&tickets);
+        let candidates: Vec<ticket::Ticket> = tickets
+            .into_iter()
+            .filter(|t| {
+                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+                    && t.deps.iter().all(|dep_id| closed_ids.contains(dep_id))
+            })
+            .collect();
+        let mut filter = filter::Filter::from_args(&args)?;
+        filter.status = None;
+        let filtered = filter::apply_filters(candidates, &filter);
+        output::output_many_full_to_writer(&filtered, &args.pluck, args.count, args.full, w)
+    }
+
+    /// Mirror of cmd_blocked that writes output to an arbitrary writer.
+    fn cmd_blocked_to_writer<W: std::io::Write>(
+        args: cli::FilterArgs,
+        w: &mut W,
+    ) -> Result<()> {
+        let st = store::Store::open()?;
+        let mut tickets = st.read_all()?;
+        deps::compute_reverse_fields(&mut tickets);
+        let closed_ids = closed_id_set(&tickets);
+        let candidates: Vec<ticket::Ticket> = tickets
+            .into_iter()
+            .filter(|t| {
+                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+                    && t.deps.iter().any(|dep_id| !closed_ids.contains(dep_id))
+            })
+            .collect();
+        let mut filter = filter::Filter::from_args(&args)?;
+        filter.status = None;
+        let filtered = filter::apply_filters(candidates, &filter);
+        output::output_many_full_to_writer(&filtered, &args.pluck, args.count, args.full, w)
+    }
+
     fn init_args() -> cli::InitArgs {
         cli::InitArgs {}
     }
@@ -1421,6 +1478,33 @@ mod tests {
         let err = result.unwrap_err();
         assert_eq!(err.code(), "invalid_field");
         assert!(err.to_string().contains("title is required"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_with_duplicate_id_returns_exit_code_4() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args1 = create_args(Some("First"));
+        args1.id = Some("dup-id-01".to_string());
+        cmd_create(args1, false, false).unwrap();
+
+        let mut args2 = create_args(Some("Second with same ID"));
+        args2.id = Some("dup-id-01".to_string());
+        let result = cmd_create(args2, false, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "id_exists");
+        assert_eq!(err.exit_code(), 4);
+        assert!(err.to_string().contains("dup-id-01"));
+
+        // Verify error JSON has correct structure
+        let json = error::error_json(&err);
+        assert_eq!(json["error"], "id_exists");
+        assert!(json["suggestion"].as_str().unwrap().contains("different --id"));
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -2551,7 +2635,7 @@ mod tests {
 
     #[test]
     #[serial(env)]
-    fn update_stderr_contains_updated_id() {
+    fn update_succeeds_and_persists_change() {
         let tmp = tempfile::tempdir().unwrap();
         setup_vima(&tmp);
 
@@ -2561,8 +2645,11 @@ mod tests {
 
         let mut ua = update_args("upd-08");
         ua.title = Some("Updated title".to_string());
-        let result = cmd_update(ua, true, false);
-        assert!(result.is_ok(), "update should succeed: {:?}", result);
+        cmd_update(ua, true, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("upd-08").unwrap();
+        assert_eq!(ticket.title, "Updated title");
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -3265,8 +3352,13 @@ notes: []
 
         let mut fa = filter_args_default();
         fa.pluck = Some("id".to_string());
-        let result = cmd_list(fa, false);
-        assert!(result.is_ok());
+        let mut buf = Vec::new();
+        cmd_list_to_writer(fa, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0], serde_json::json!("lstpl-a"));
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -3283,8 +3375,11 @@ notes: []
 
         let mut fa = filter_args_default();
         fa.count = true;
-        let result = cmd_list(fa, false);
-        assert!(result.is_ok());
+        let mut buf = Vec::new();
+        cmd_list_to_writer(fa, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let count: usize = output.trim().parse().expect("expected integer output");
+        assert_eq!(count, 1);
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -3383,40 +3478,21 @@ notes: []
         cmd_create(b, true, false).unwrap();
 
         // Only A should be ready (B depends on A which is open)
-        let result = cmd_ready(filter_args_default(), false);
-        assert!(result.is_ok(), "cmd_ready failed: {:?}", result);
-
-        let st = store::Store::open().unwrap();
-        let mut tickets = st.read_all().unwrap();
-        deps::compute_reverse_fields(&mut tickets);
-        let closed_ids: std::collections::HashSet<String> = tickets
-            .iter()
-            .filter(|t| t.status == ticket::Status::Closed)
-            .map(|t| t.id.clone())
-            .collect();
-        let ready_ids: Vec<String> = tickets
-            .iter()
-            .filter(|t| {
-                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
-                    && t.deps.iter().all(|d| closed_ids.contains(d))
-            })
-            .map(|t| t.id.clone())
-            .collect();
-        assert!(
-            ready_ids.contains(&"ready-a".to_string()),
-            "A should be ready"
-        );
-        assert!(
-            !ready_ids.contains(&"ready-b".to_string()),
-            "B should not be ready"
-        );
+        let mut buf = Vec::new();
+        cmd_ready_to_writer(filter_args_default(), &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array");
+        let ids: Vec<&str> = arr.iter().map(|v| v["id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&"ready-a"), "A should be ready");
+        assert!(!ids.contains(&"ready-b"), "B should not be ready");
 
         std::env::remove_var("VIMA_DIR");
     }
 
     #[test]
     #[serial(env)]
-    fn ready_after_closing_dep_includes_both() {
+    fn ready_after_closing_dep_includes_unblocked() {
         let tmp = tempfile::tempdir().unwrap();
         setup_vima(&tmp);
 
@@ -3440,33 +3516,19 @@ notes: []
         )
         .unwrap();
 
-        let result = cmd_ready(filter_args_default(), false);
-        assert!(result.is_ok(), "cmd_ready after close failed: {:?}", result);
-
-        let st = store::Store::open().unwrap();
-        let mut tickets = st.read_all().unwrap();
-        deps::compute_reverse_fields(&mut tickets);
-        let closed_ids: std::collections::HashSet<String> = tickets
-            .iter()
-            .filter(|t| t.status == ticket::Status::Closed)
-            .map(|t| t.id.clone())
-            .collect();
-        // Only open/in_progress are "ready"
-        let ready_ids: Vec<String> = tickets
-            .iter()
-            .filter(|t| {
-                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
-                    && t.deps.iter().all(|d| closed_ids.contains(d))
-            })
-            .map(|t| t.id.clone())
-            .collect();
+        let mut buf = Vec::new();
+        cmd_ready_to_writer(filter_args_default(), &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array");
+        let ids: Vec<&str> = arr.iter().map(|v| v["id"].as_str().unwrap()).collect();
         // A is closed so not in ready list; B is now ready
         assert!(
-            !ready_ids.contains(&"rca-a".to_string()),
+            !ids.contains(&"rca-a"),
             "A is closed, not in ready list"
         );
         assert!(
-            ready_ids.contains(&"rca-b".to_string()),
+            ids.contains(&"rca-b"),
             "B should be ready after A is closed"
         );
 
@@ -3485,8 +3547,11 @@ notes: []
 
         let mut args = filter_args_default();
         args.count = true;
-        let result = cmd_ready(args, false);
-        assert!(result.is_ok(), "cmd_ready --count failed: {:?}", result);
+        let mut buf = Vec::new();
+        cmd_ready_to_writer(args, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let count: usize = output.trim().parse().expect("expected integer output");
+        assert_eq!(count, 1, "one ready ticket expected");
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -3506,32 +3571,15 @@ notes: []
         b.id = Some("rt-b".to_string());
         cmd_create(b, true, false).unwrap();
 
-        let st = store::Store::open().unwrap();
-        let mut tickets = st.read_all().unwrap();
-        deps::compute_reverse_fields(&mut tickets);
-        let closed_ids: std::collections::HashSet<String> = tickets
-            .iter()
-            .filter(|t| t.status == ticket::Status::Closed)
-            .map(|t| t.id.clone())
-            .collect();
-        let candidates: Vec<_> = tickets
-            .into_iter()
-            .filter(|t| {
-                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
-                    && t.deps.iter().all(|d| closed_ids.contains(d))
-            })
-            .collect();
-        let filter = filter::Filter {
-            status: None,
-            tags: vec!["backend".to_string()],
-            ticket_type: None,
-            priority_range: None,
-            assignee: None,
-            limit: None,
-        };
-        let filtered = filter::apply_filters(candidates, &filter);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].id, "rt-a");
+        let mut args = filter_args_default();
+        args.tag = vec!["backend".to_string()];
+        let mut buf = Vec::new();
+        cmd_ready_to_writer(args, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "rt-a");
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -3553,35 +3601,16 @@ notes: []
         b.dep = vec!["blk-a".to_string()];
         cmd_create(b, true, false).unwrap();
 
-        let result = cmd_blocked(filter_args_default(), false);
-        assert!(result.is_ok(), "cmd_blocked failed: {:?}", result);
-
-        // Verify state: B should be in blocked list, A should not
-        let st = store::Store::open().unwrap();
-        let tickets = st.read_all().unwrap();
-        let closed_ids: std::collections::HashSet<String> = tickets
-            .iter()
-            .filter(|t| t.status == ticket::Status::Closed)
-            .map(|t| t.id.clone())
-            .collect();
-        let blocked: Vec<_> = tickets
-            .iter()
-            .filter(|t| {
-                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
-                    && t.deps.iter().any(|d| !closed_ids.contains(d))
-            })
-            .collect();
-        assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].id, "blk-b");
-
-        // Verify open_deps for B
-        let b_ticket = blocked[0];
-        let open_deps: Vec<&String> = b_ticket
-            .deps
-            .iter()
-            .filter(|d| !closed_ids.contains(*d))
-            .collect();
-        assert_eq!(open_deps, vec![&"blk-a".to_string()]);
+        let mut buf = Vec::new();
+        cmd_blocked_to_writer(filter_args_default(), &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "blk-b");
+        // B should have blk-a in its deps
+        let deps = arr[0]["deps"].as_array().unwrap();
+        assert!(deps.contains(&serde_json::json!("blk-a")));
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -3608,32 +3637,15 @@ notes: []
         c.dep = vec!["bpf-a".to_string()];
         cmd_create(c, true, false).unwrap();
 
-        let st = store::Store::open().unwrap();
-        let tickets = st.read_all().unwrap();
-        let closed_ids: std::collections::HashSet<String> = tickets
-            .iter()
-            .filter(|t| t.status == ticket::Status::Closed)
-            .map(|t| t.id.clone())
-            .collect();
-        let blocked_candidates: Vec<_> = tickets
-            .into_iter()
-            .filter(|t| {
-                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
-                    && t.deps.iter().any(|d| !closed_ids.contains(d))
-            })
-            .collect();
-        // Apply priority filter 0-2
-        let filter = filter::Filter {
-            status: None,
-            tags: vec![],
-            ticket_type: None,
-            priority_range: Some((0, 2)),
-            assignee: None,
-            limit: None,
-        };
-        let filtered = filter::apply_filters(blocked_candidates, &filter);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].id, "bpf-b");
+        let mut args = filter_args_default();
+        args.priority = Some("0-2".to_string());
+        let mut buf = Vec::new();
+        cmd_blocked_to_writer(args, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "bpf-b");
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -3859,7 +3871,7 @@ notes: []
 
     #[test]
     #[serial(env)]
-    fn pretty_list_returns_ok_and_shows_header() {
+    fn pretty_list_returns_ok_and_json_output_has_correct_tickets() {
         let tmp = tempfile::tempdir().unwrap();
         setup_vima(&tmp);
 
@@ -3873,8 +3885,20 @@ notes: []
         args2.id = Some("pt-b2".to_string());
         cmd_create(args2, true, false).unwrap();
 
+        // Verify pretty mode doesn't error
         let result = cmd_list(filter_args_default(), true);
         assert!(result.is_ok(), "pretty list failed: {:?}", result);
+
+        // Verify JSON output contains the correct tickets
+        let mut buf = Vec::new();
+        cmd_list_to_writer(filter_args_default(), &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array");
+        assert_eq!(arr.len(), 2);
+        let ids: Vec<&str> = arr.iter().map(|v| v["id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&"pt-a1"));
+        assert!(ids.contains(&"pt-b2"));
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -3893,7 +3917,7 @@ notes: []
 
     #[test]
     #[serial(env)]
-    fn pretty_show_returns_ok() {
+    fn pretty_show_returns_ok_and_json_has_correct_fields() {
         let tmp = tempfile::tempdir().unwrap();
         setup_vima(&tmp);
 
@@ -3905,12 +3929,28 @@ notes: []
         args.description = Some("The auth middleware stores session tokens...".to_string());
         cmd_create(args, true, false).unwrap();
 
+        // Verify pretty mode doesn't error
         let sa = cli::ShowArgs {
             id: "pt-show1".to_string(),
             pluck: None,
         };
         let result = cmd_show(sa, true, true);
         assert!(result.is_ok(), "pretty show failed: {:?}", result);
+
+        // Verify JSON output has correct fields
+        let mut buf = Vec::new();
+        cmd_show_to_writer(show_args("pt-show1"), true, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed["id"], "pt-show1");
+        assert_eq!(parsed["title"], "Show me pretty");
+        assert_eq!(parsed["assignee"], "alice");
+        assert_eq!(parsed["estimate"], 30);
+        assert_eq!(parsed["tags"], serde_json::json!(["backend", "auth"]));
+        assert_eq!(
+            parsed["description"],
+            "The auth middleware stores session tokens..."
+        );
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -4542,19 +4582,13 @@ notes: []
         )
         .unwrap();
 
-        let st = store::Store::open().unwrap();
-        let mut tickets = st.read_all().unwrap();
-        deps::compute_reverse_fields(&mut tickets);
-        let closed_ids = closed_id_set(&tickets);
-
-        let still_blocked: Vec<&ticket::Ticket> = tickets
-            .iter()
-            .filter(|t| {
-                t.status != ticket::Status::Closed && t.deps.iter().any(|d| !closed_ids.contains(d))
-            })
-            .collect();
-        assert_eq!(still_blocked.len(), 1);
-        assert_eq!(still_blocked[0].id, "blk-main");
+        let mut buf = Vec::new();
+        cmd_blocked_to_writer(filter_args_default(), &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "blk-main");
 
         // Close second dep — ticket should no longer be blocked
         cmd_close(
@@ -4567,18 +4601,12 @@ notes: []
         )
         .unwrap();
 
-        let mut tickets2 = st.read_all().unwrap();
-        deps::compute_reverse_fields(&mut tickets2);
-        let closed_ids2 = closed_id_set(&tickets2);
-
-        let still_blocked2: Vec<&ticket::Ticket> = tickets2
-            .iter()
-            .filter(|t| {
-                t.status != ticket::Status::Closed
-                    && t.deps.iter().any(|d| !closed_ids2.contains(d))
-            })
-            .collect();
-        assert!(still_blocked2.is_empty());
+        let mut buf2 = Vec::new();
+        cmd_blocked_to_writer(filter_args_default(), &mut buf2).unwrap();
+        let output2 = String::from_utf8(buf2).unwrap();
+        let parsed2: serde_json::Value = serde_json::from_str(output2.trim()).unwrap();
+        let arr2 = parsed2.as_array().expect("expected JSON array");
+        assert!(arr2.is_empty());
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -4593,18 +4621,12 @@ notes: []
         a.id = Some("blk-none".to_string());
         cmd_create(a, true, false).unwrap();
 
-        let st = store::Store::open().unwrap();
-        let mut tickets = st.read_all().unwrap();
-        deps::compute_reverse_fields(&mut tickets);
-        let closed_ids = closed_id_set(&tickets);
-
-        let blocked: Vec<&ticket::Ticket> = tickets
-            .iter()
-            .filter(|t| {
-                t.status != ticket::Status::Closed && t.deps.iter().any(|d| !closed_ids.contains(d))
-            })
-            .collect();
-        assert!(blocked.is_empty());
+        let mut buf = Vec::new();
+        cmd_blocked_to_writer(filter_args_default(), &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array");
+        assert!(arr.is_empty());
 
         std::env::remove_var("VIMA_DIR");
     }

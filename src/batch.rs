@@ -728,6 +728,81 @@ not valid json
 
     #[test]
     #[serial(env)]
+    fn batch_non_numeric_backref_returns_error() {
+        let (_tmp, store) = setup_store();
+        let input = r#"{"title": "A", "id": "nr1"}
+{"title": "B", "dep": ["$abc"]}
+"#;
+        let err = run_batch(&store, input).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("line 2"), "expected line 2 in error: {msg}");
+        assert!(
+            msg.contains("back-reference"),
+            "expected back-reference error: {msg}"
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_mixed_valid_invalid_preserves_created_tickets() {
+        let (_tmp, store) = setup_store();
+        // Line 1: valid, Line 2: valid, Line 3: invalid (missing title)
+        let input = r#"{"title": "Good1", "id": "mix1"}
+{"title": "Good2", "id": "mix2"}
+{"priority": 0}
+"#;
+        let err = run_batch(&store, input).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("line 3"), "expected line 3 in error: {msg}");
+        assert!(
+            msg.contains("already created"),
+            "error should list already-created IDs: {msg}"
+        );
+        assert!(msg.contains("mix1"), "should mention mix1: {msg}");
+        assert!(msg.contains("mix2"), "should mention mix2: {msg}");
+
+        // First two tickets should exist on disk
+        let t1 = store.read_ticket("mix1").unwrap();
+        assert_eq!(t1.title, "Good1");
+        let t2 = store.read_ticket("mix2").unwrap();
+        assert_eq!(t2.title, "Good2");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_duplicate_id_with_existing_on_disk_returns_error() {
+        let (_tmp, store) = setup_store();
+        // Create a ticket on disk first
+        let input1 = r#"{"title": "Existing", "id": "ondisk"}
+"#;
+        run_batch(&store, input1).unwrap();
+
+        // Now try to batch-create with the same id
+        let input2 = r#"{"title": "Dupe of ondisk", "id": "ondisk"}
+"#;
+        let err = run_batch(&store, input2).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("ondisk"), "expected ondisk in error: {msg}");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn batch_backref_zero_index_returns_error() {
+        let (_tmp, store) = setup_store();
+        let input = r#"{"title": "A", "id": "bz1"}
+{"title": "B", "dep": ["$0"]}
+"#;
+        let err = run_batch(&store, input).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("line 2"), "expected line 2 in error: {msg}");
+        assert!(
+            msg.contains("out of range"),
+            "expected out-of-range error: {msg}"
+        );
+    }
+
+    #[test]
+    #[serial(env)]
     fn batch_json_array_instead_of_object_returns_error() {
         let (_tmp, store) = setup_store();
         // A JSON array on a line instead of an object
