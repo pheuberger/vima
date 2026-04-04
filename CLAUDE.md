@@ -48,6 +48,8 @@ Use **semantic commit messages**: `type: short description`. Common prefixes: `f
 
 **Every code change MUST include tests.** No exceptions. New features, bug fixes, refactors — all require corresponding test coverage. Do not submit code without tests. Run `cargo test` to verify all tests pass before considering work complete.
 
+**Tests MUST exercise production code, never reimplement it.** A test that re-implements filtering, sorting, or any command logic inline is fundamentally wrong — if the production code diverges from the reimplementation, the test won't catch it. Always call the real `cmd_*` functions (or their `_to_writer` test variants) and assert on their output. Use `_to_writer` helpers (e.g. `cmd_list_to_writer`, `cmd_ready_to_writer`) to capture output for verification.
+
 ## Build & development commands
 
 ```bash
