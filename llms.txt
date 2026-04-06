@@ -60,6 +60,20 @@ vima close ID --reason "Done"       # close with reason
 - No interactive prompts — fully non-interactive by design
 - JSON to stdout, errors to stderr — pipe-safe
 
+## Distributed sync
+
+Local multi-agent and multi-worktree use works out of the box (shared `.vima/`, file locking, optimistic concurrency). For distributed collaboration — remote teammates, cloud-hosted agents, CI systems, different machines — the `vima-sync` plugin adds git-based coordination:
+
+```sh
+vima sync start vi-1234 --assignee agent-a   # pull, claim, commit, push — one command
+vima sync list --pluck id,title              # pull fresh state, no push
+```
+
+- Mutations (create, update, start, close, reopen, delete, batch): pull → execute → commit → push
+- Read-only commands: pull → execute (no push)
+- Push conflicts: automatic retry with semantic conflict detection (exit 6 if claimed, exit 5 if stale)
+- Config: `VIMA_SYNC_REMOTE` (default: origin), `VIMA_SYNC_BRANCH` (default: current), `VIMA_SYNC_RETRIES` (default: 3)
+
 ## Storage
 
 Tickets are `.vima/tickets/{id}.md` — Markdown with YAML frontmatter. Diffs and merges like code. vima walks up the directory tree to find `.vima/`, or use `VIMA_DIR` env var.

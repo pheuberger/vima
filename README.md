@@ -378,6 +378,41 @@ vima add-note "$NEXT" "Implemented in commit abc123"
 vima close "$NEXT" --reason "Shipped in PR #42"
 ```
 
+### Distributed sync (`vima-sync` plugin)
+
+Multiple agents and worktrees on the same machine already work — they share the same `.vima/` directory, with file locking and optimistic concurrency handling local races. The `vima-sync` plugin solves a different problem: **distributed collaboration where participants don't share a filesystem** — remote teammates, agents running in cloud sandboxes, CI systems, or developers on different machines.
+
+It wraps any vima command with git pull/push, so participants get coordination without knowing about git:
+
+```sh
+# Instead of 5 chained git+vima commands, one command:
+vima sync start vi-1234 --assignee agent-a
+
+# Read-only commands pull fresh state automatically:
+vima sync list --pluck id,title,status
+
+# All mutation commands (create, update, start, close, reopen, delete, batch)
+# are pulled, committed, and pushed atomically with retry logic.
+```
+
+If two participants race to claim the same ticket, one succeeds and the other gets exit code 6 (already claimed). Push failures trigger automatic retry with conflict detection (up to 3 attempts by default).
+
+Configuration via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VIMA_SYNC_REMOTE` | `origin` | Git remote to sync with |
+| `VIMA_SYNC_BRANCH` | current branch | Branch to push to |
+| `VIMA_SYNC_RETRIES` | `3` | Max push retry attempts |
+
+Install by placing `plugins/vima-sync` on your PATH:
+
+```sh
+cp plugins/vima-sync /usr/local/bin/
+# or
+export PATH="/path/to/vima-cli/plugins:$PATH"
+```
+
 ### Multi-agent / automation setup
 
 ```sh

@@ -64,6 +64,8 @@ cargo clippy -- -D warnings          # lint (CI enforces zero warnings)
 
 CI runs: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.
 
+The `vima-sync` plugin has its own test suite: `bash tests/sync_plugin_test.sh`.
+
 ## Architecture
 
 **Entry point**: `src/main.rs` — CLI dispatcher that routes commands to handler functions. All command logic lives here.
@@ -79,6 +81,9 @@ CI runs: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.
 - `output.rs` — JSON formatting, `--pluck` field extraction, `--count`, `--pretty` colored output
 - `error.rs` — Structured error types with JSON serialization and semantic exit codes (0=ok, 1=general error, 2=cycle/blocked, 3=not found/ambiguous, 4=conflict, 5=stale, 6=already claimed)
 - `plugin.rs` — Discovers `vima-{name}` executables on PATH, passes context via env vars
+
+**Plugins**:
+- `plugins/vima-sync` — Distributed ticket sync via git pull/push. Wraps any vima command with automatic git coordination for collaboration across remote machines, cloud agents, and CI systems (local multi-agent/worktree already works without sync).
 
 **Key patterns**:
 - Computed fields (`blocks`, `children`) are derived at read time from reverse lookups, not stored
@@ -108,3 +113,4 @@ Run `vima help --json` for the full command schema — it always reflects the in
 - Errors are JSON on stderr with `error`, `message`, and context fields
 - Tickets have a `version` field (content hash) — concurrent writes fail with exit 5 (stale). Re-read and retry.
 - `vima start ID --assignee NAME` claims a ticket. Fails with exit 6 if already claimed by a different assignee. Same assignee is idempotent.
+- `vima sync <command> [args]` (via the vima-sync plugin) wraps any command with git pull/push for distributed collaboration. Use this when participants don't share a filesystem — remote teammates, cloud agents, CI. Local multi-agent/worktree use doesn't need sync.
