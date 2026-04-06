@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# vima-plugin: Distributed ticket sync via git pull/push
+#
+# Wraps any vima command with git pull-before / push-after semantics.
+# Agents call `vima sync <command> [args...]` instead of bare `vima <command>`.
+#
+# Mutation commands (create, update, start, close, reopen, delete, batch)
+# get pull + command + commit + push.
+# Read-only commands (everything else) get pull + command (no push).
+#
+# Environment variables:
+#   VIMA_SYNC_REMOTE   - git remote (default: origin)
+#   VIMA_SYNC_BRANCH   - branch to push (default: current branch)
+#   VIMA_SYNC_RETRIES  - max push retries (default: 3)
+
+set -euo pipefail
+
+REMOTE="${VIMA_SYNC_REMOTE:-origin}"
+MAX_RETRIES="${VIMA_SYNC_RETRIES:-3}"
+VIMA="${VIMA_BIN:-vima}"
+
+# --- helpers ----------------------------------------------------------------
+
+die() {
+    local msg="$1"
+    local suggestion="${2:-}"
+    local json="{\"error\":\"sync_error\",\"message\":\"$msg\""
+    if [ -n "$suggestion" ]; then
+        json="$json,\"suggestion\":\"$suggestion\""
+    fi
+    json="$json}"
+    echo "$json" >&2
+    exit 1
+}
+
+# Resolve the git repo root from VIMA_DIR (which points to .vima/)
+find_repo_root() {
+    local start="${VIMA_DIR:-.vima}"
+    # Go up from .vima/ to find the git root
+    local dir
+    dir="$(cd "$start/.." 2>/dev/null && pwd)"
+    if [ -d "$dir/.git" ] || git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+        echo "$dir"
+    else
+        return 1
+    fi
+}
+
+current_branch() {
+    git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD
+}
+
+is_mutation() {
+    case "$1" in
+        create|update|start|close|reopen|delete|batch) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+git_pull() {
+    local branch="$1"
+    if ! git -C "$REPO_ROOT" pull --rebase "$REMOTE" "$branch" >/dev/null 2>&1; then
+        # If pull fails due to no tracking / no remote branch yet, that's OK for new repos
+        if git -C "$REPO_ROOT" ls-remote --exit-code "$REMOTE" "$branch" >/dev/null 2>&1; then
+            die "git pull --rebase failed" "Check network connectivity and resolve any rebase conflicts"
+        fi
+        # Remote branch doesn't exist yet — skip pull, push will create it
+    fi
+}
+
+git_push_with_retry() {
+    local branch="$1"
+    local subcmd="$2"
+    shift 2
+    local attempt=0
+
+    while [ "$attempt" -lt "$MAX_RETRIES" ]; do
+        # Stage and commit
+        git -C "$REPO_ROOT" add .vima/ 2>/dev/null
+        if git -C "$REPO_ROOT" diff --cached --quiet 2>/dev/null; then
+            # Nothing to commit (command was no-op or --dry-run)
+            return 0
+        fi
+
+        local commit_msg="vima: $subcmd"
+        # Try to extract ticket ID from args for a better commit message
+        local id_arg=""
+        for arg in "$@"; do
+            case "$arg" in
+                --*) ;; # skip flags
+                -*) ;;  # skip short flags
+                *)
+                    if [ -z "$id_arg" ]; then
+                        id_arg="$arg"
+                    fi
+                    ;;
+            esac
+        done
+        if [ -n "$id_arg" ]; then
+            commit_msg="vima: $subcmd $id_arg"
+        fi
+
+        git -C "$REPO_ROOT" commit -m "$commit_msg" --quiet 2>/dev/null || true
+
+        if git -C "$REPO_ROOT" push "$REMOTE" "$branch" --quiet >/dev/null 2>&1; then
+            return 0
+        fi
+
+        # Push failed — pull and check for semantic conflicts
+        attempt=$((attempt + 1))
+        if [ "$attempt" -ge "$MAX_RETRIES" ]; then
+            die "push failed after $MAX_RETRIES attempts" "Check network connectivity or run manually: git -C $REPO_ROOT push $REMOTE $branch"
+        fi
+
+        # Pull to get latest
+        if ! git -C "$REPO_ROOT" pull --rebase "$REMOTE" "$branch" >/dev/null 2>&1; then
+            # Rebase conflict — check if it's in the same ticket
+            if git -C "$REPO_ROOT" diff --name-only --diff-filter=U 2>/dev/null | grep -q '.vima/'; then
+                git -C "$REPO_ROOT" rebase --abort 2>/dev/null || true
+                die "merge conflict in .vima/ during sync" "Another agent modified the same ticket concurrently — re-read and retry"
+            fi
+        fi
+
+        # After pulling, re-run the vima command to detect semantic conflicts
+        # (e.g., ticket was claimed by someone else during the race)
+        local recheck_exit=0
+        "$VIMA" "$subcmd" "$@" 2>/dev/null || recheck_exit=$?
+
+        if [ "$recheck_exit" -eq 6 ]; then
+            # Already claimed by another agent — surface this
+            exit 6
+        elif [ "$recheck_exit" -eq 5 ]; then
+            # Stale version — the pull got newer data, command re-applied. Loop to push again.
+            continue
+        elif [ "$recheck_exit" -ne 0 ]; then
+            # Some other error on re-apply
+            exit "$recheck_exit"
+        fi
+    done
+}
+
+# --- main -------------------------------------------------------------------
+
+if [ $# -eq 0 ]; then
+    die "no command specified" "Usage: vima sync <command> [args...]"
+fi
+
+# Preflight: git must be available
+if ! command -v git >/dev/null 2>&1; then
+    die "git is not installed" "Install git to use vima sync"
+fi
+
+REPO_ROOT="$(find_repo_root)" || die "not inside a git repository" "Initialize a git repo or set VIMA_DIR to a .vima/ inside one"
+
+BRANCH="${VIMA_SYNC_BRANCH:-$(current_branch)}"
+SUBCMD="$1"
+shift
+
+# Pull to get fresh state
+git_pull "$BRANCH"
+
+# Run the actual vima command, capturing exit code and output
+set +e
+output=$("$VIMA" "$SUBCMD" "$@" 2>/tmp/vima-sync-stderr.$$)
+vima_exit=$?
+set -e
+
+# Forward stderr
+if [ -s "/tmp/vima-sync-stderr.$$" ]; then
+    cat "/tmp/vima-sync-stderr.$$" >&2
+fi
+rm -f "/tmp/vima-sync-stderr.$$"
+
+# Forward stdout
+if [ -n "$output" ]; then
+    echo "$output"
+fi
+
+# If vima failed, exit with its code (no push)
+if [ "$vima_exit" -ne 0 ]; then
+    exit "$vima_exit"
+fi
+
+# For mutations, commit and push
+if is_mutation "$SUBCMD"; then
+    git_push_with_retry "$BRANCH" "$SUBCMD" "$@"
+fi
+
+exit 0
