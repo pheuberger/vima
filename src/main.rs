@@ -860,7 +860,7 @@ fn help_json() -> serde_json::Value {
         "name": "vima",
         "about": "AI-agent-first ticketing CLI",
         "global_flags": [
-            {"long": "--pretty", "help": "Output in human-readable pretty format"},
+            {"long": "--pretty", "help": "Human-only: pretty-print output (agents: use default JSON + --pluck instead)"},
             {"long": "--exact", "help": "Use exact ID matching (no partial match). Also: VIMA_EXACT=1"},
             {"long": "--dry-run", "help": "Preview changes without persisting (mutating commands only)"}
         ],

@@ -9,7 +9,7 @@ use crate::ticket::{Status, TicketType};
     disable_help_subcommand = true
 )]
 pub struct Cli {
-    /// Output in human-readable pretty format
+    /// Human-only: pretty-print output (agents: use default JSON + --pluck instead)
     #[arg(long, global = true)]
     pub pretty: bool,
 
