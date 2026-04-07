@@ -22,6 +22,10 @@ pub(crate) fn parse_tags(input: &str) -> Vec<String> {
 }
 
 fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool) -> Result<()> {
+    // Merge --title flag into positional title (flag takes precedence)
+    if args.title.is_none() {
+        args.title = args.title_flag.take();
+    }
     if let Some(ref json_str) = args.json {
         let obj: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| Error::Yaml(format!("invalid --json: {e}")))?;
@@ -1389,6 +1393,7 @@ mod tests {
     fn create_args(title: Option<&str>) -> cli::CreateArgs {
         cli::CreateArgs {
             title: title.map(|s| s.to_string()),
+            title_flag: None,
             ticket_type: None,
             priority: None,
             assignee: None,
@@ -1441,6 +1446,31 @@ mod tests {
         assert_eq!(ticket.ticket_type, ticket::TicketType::Bug);
         assert_eq!(ticket.priority, 1);
         assert_eq!(ticket.status, ticket::Status::Open);
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn create_title_flag_overrides_positional() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(None);
+        args.title_flag = Some("From --title flag".to_string());
+        args.description = Some("From --body alias".to_string());
+
+        let result = cmd_create(args, false, false);
+        assert!(result.is_ok(), "create failed: {:?}", result);
+
+        let st = store::Store::open().unwrap();
+        let tickets = st.read_all().unwrap();
+        assert_eq!(tickets.len(), 1);
+        assert_eq!(tickets[0].title, "From --title flag");
+        assert_eq!(
+            tickets[0].description.as_deref(),
+            Some("From --body alias")
+        );
 
         std::env::remove_var("VIMA_DIR");
     }

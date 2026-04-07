@@ -70,8 +70,12 @@ pub enum Commands {
 
 #[derive(Args, Debug)]
 pub struct CreateArgs {
-    /// Ticket title
+    /// Ticket title (positional)
     pub title: Option<String>,
+
+    /// Ticket title (named flag, alias for positional)
+    #[arg(long = "title", hide = true)]
+    pub title_flag: Option<String>,
 
     /// Ticket type
     #[arg(short = 't', long = "type")]
@@ -94,7 +98,7 @@ pub struct CreateArgs {
     pub tags: Option<String>,
 
     /// Description
-    #[arg(long)]
+    #[arg(long, alias = "body")]
     pub description: Option<String>,
 
     /// Design notes
@@ -140,7 +144,7 @@ pub struct UpdateArgs {
     pub title: Option<String>,
 
     /// New description
-    #[arg(long)]
+    #[arg(long, alias = "body")]
     pub description: Option<String>,
 
     /// New design notes
