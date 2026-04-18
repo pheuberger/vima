@@ -39,10 +39,7 @@ fn unknown_command_returns_structured_error() {
         serde_json::from_str(stderr.trim()).expect("stderr should be JSON");
     assert_eq!(err["error"], "invalid_field");
     assert!(
-        err["message"]
-            .as_str()
-            .unwrap()
-            .contains("unknown command"),
+        err["message"].as_str().unwrap().contains("unknown command"),
         "error should mention unknown command"
     );
 }
@@ -59,10 +56,7 @@ fn plugin_on_path_gets_executed() {
     let plugin_path = plugin_dir.path().join("vima-testplug");
     fs::write(
         &plugin_path,
-        format!(
-            "#!/bin/sh\ntouch {}\n",
-            marker.display()
-        ),
+        format!("#!/bin/sh\ntouch {}\n", marker.display()),
     )
     .unwrap();
     let mut perms = fs::metadata(&plugin_path).unwrap().permissions();
@@ -84,7 +78,10 @@ fn plugin_on_path_gets_executed() {
         "plugin should succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(marker.exists(), "plugin should have executed and created marker file");
+    assert!(
+        marker.exists(),
+        "plugin should have executed and created marker file"
+    );
 }
 
 // ── Plugin receives VIMA_DIR env var ────────────────────────────────────
@@ -150,10 +147,7 @@ fn plugin_receives_arguments() {
     let plugin_path = plugin_dir.path().join("vima-argtest");
     fs::write(
         &plugin_path,
-        format!(
-            "#!/bin/sh\necho \"$@\" > {}\n",
-            output_file.display()
-        ),
+        format!("#!/bin/sh\necho \"$@\" > {}\n", output_file.display()),
     )
     .unwrap();
     let mut perms = fs::metadata(&plugin_path).unwrap().permissions();

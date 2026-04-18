@@ -11,11 +11,7 @@ fn setup_store(prefix: &str) -> tempfile::TempDir {
     let vima_dir = tmp.path().join(".vima");
     let tickets_dir = vima_dir.join("tickets");
     fs::create_dir_all(&tickets_dir).unwrap();
-    fs::write(
-        vima_dir.join("config.yml"),
-        format!("prefix: {}\n", prefix),
-    )
-    .unwrap();
+    fs::write(vima_dir.join("config.yml"), format!("prefix: {}\n", prefix)).unwrap();
     tmp
 }
 
@@ -160,7 +156,9 @@ fn stress_dependency_chain_100() {
     for i in 1..100 {
         lines.push_str(&format!(
             "{{\"title\": \"Chain {}\", \"id\": \"s4-c{:03}\", \"dep\": [\"${}\"]}}\n",
-            i, i, i // $i references the i-th ticket (1-indexed)
+            i,
+            i,
+            i // $i references the i-th ticket (1-indexed)
         ));
     }
 
@@ -323,7 +321,9 @@ fn stress_ready_with_deps_200() {
         // Each blocked ticket depends on the corresponding blocker
         lines.push_str(&format!(
             "{{\"title\": \"Blocked {}\", \"id\": \"s7-d{:03}\", \"dep\": [\"${}\"]}}\n",
-            i, i, i + 1
+            i,
+            i,
+            i + 1
         ));
     }
 

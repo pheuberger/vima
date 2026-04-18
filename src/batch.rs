@@ -254,7 +254,11 @@ pub fn create_from_spec(
 
 /// Batch-create tickets from a JSON-lines reader.
 /// Each non-empty line must be a JSON object representing a ticket spec.
-pub fn batch_create_reader<R: BufRead>(store: &Store, reader: R, exact: bool) -> Result<Vec<Ticket>> {
+pub fn batch_create_reader<R: BufRead>(
+    store: &Store,
+    reader: R,
+    exact: bool,
+) -> Result<Vec<Ticket>> {
     // Read at most 1001 raw lines to detect overflow
     let mut raw_lines: Vec<String> = Vec::new();
     for result in reader.lines().take(BATCH_MAX_LINES + 1) {

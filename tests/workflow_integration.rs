@@ -104,26 +104,21 @@ fn dependency_chain_blocked_and_ready() {
     run_ok(vima_cmd(&tmp).args(["dep", "add", &b, &a]));
 
     // B should be blocked (is-ready exits non-zero)
-    let output = vima_cmd(&tmp)
-        .args(["is-ready", &b])
-        .output()
-        .unwrap();
+    let output = vima_cmd(&tmp).args(["is-ready", &b]).output().unwrap();
     assert_ne!(output.status.code().unwrap(), 0, "B should be blocked");
 
     // A should be ready
-    let output = vima_cmd(&tmp)
-        .args(["is-ready", &a])
-        .output()
-        .unwrap();
+    let output = vima_cmd(&tmp).args(["is-ready", &a]).output().unwrap();
     assert_eq!(output.status.code().unwrap(), 0, "A should be ready");
 
     // Close A, now B should be ready
     run_ok(vima_cmd(&tmp).args(["close", &a]));
-    let output = vima_cmd(&tmp)
-        .args(["is-ready", &b])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code().unwrap(), 0, "B should be ready after A closed");
+    let output = vima_cmd(&tmp).args(["is-ready", &b]).output().unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        0,
+        "B should be ready after A closed"
+    );
 }
 
 // ── Cycle detection ─────────────────────────────────────────────────────
@@ -180,8 +175,16 @@ fn link_and_unlink_workflow() {
     // Both should show the link
     let json_a = run_ok(vima_cmd(&tmp).args(["show", &a]));
     let json_b = run_ok(vima_cmd(&tmp).args(["show", &b]));
-    assert!(json_a["links"].as_array().unwrap().iter().any(|v| v == &id_str(&b)));
-    assert!(json_b["links"].as_array().unwrap().iter().any(|v| v == &id_str(&a)));
+    assert!(json_a["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v == &id_str(&b)));
+    assert!(json_b["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v == &id_str(&a)));
 
     // Unlink
     run_ok(vima_cmd(&tmp).args(["unlink", &a, &b]));
@@ -218,16 +221,25 @@ fn update_modifies_fields() {
     let id = create_ticket(&tmp, "Update test");
 
     run_ok(vima_cmd(&tmp).args([
-        "update", &id,
-        "--title", "Updated title",
-        "--priority", "3",
-        "--tags", "alpha,beta",
+        "update",
+        &id,
+        "--title",
+        "Updated title",
+        "--priority",
+        "3",
+        "--tags",
+        "alpha,beta",
     ]));
 
     let json = run_ok(vima_cmd(&tmp).args(["show", &id]));
     assert_eq!(json["title"], "Updated title");
     assert_eq!(json["priority"], 3);
-    let tags: Vec<&str> = json["tags"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    let tags: Vec<&str> = json["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
     assert!(tags.contains(&"alpha"));
     assert!(tags.contains(&"beta"));
 }
@@ -255,7 +267,9 @@ fn batch_create_with_back_references() {
         // stdin is closed when dropped here
     }
 
-    let output = child.wait_with_output().expect("failed to wait on batch create");
+    let output = child
+        .wait_with_output()
+        .expect("failed to wait on batch create");
 
     assert!(
         output.status.success(),
@@ -349,10 +363,7 @@ fn dry_run_does_not_create_ticket() {
 fn show_nonexistent_returns_exit_3() {
     let tmp = setup_store();
 
-    let output = vima_cmd(&tmp)
-        .args(["show", "wf-0000"])
-        .output()
-        .unwrap();
+    let output = vima_cmd(&tmp).args(["show", "wf-0000"]).output().unwrap();
     assert_eq!(output.status.code().unwrap(), 3);
 
     let stderr = String::from_utf8_lossy(&output.stderr);

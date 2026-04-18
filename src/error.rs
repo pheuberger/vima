@@ -535,9 +535,6 @@ mod tests {
         let json = error_json(&err);
         assert_eq!(json["error"], "plugin_exec");
         assert_eq!(json["plugin"], "vima-foo");
-        assert!(json["suggestion"]
-            .as_str()
-            .unwrap()
-            .contains("executable"));
+        assert!(json["suggestion"].as_str().unwrap().contains("executable"));
     }
 }

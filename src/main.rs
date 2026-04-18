@@ -660,7 +660,14 @@ fn cmd_close(args: cli::CloseArgs, exact: bool, dry_run: bool, pretty: bool) -> 
 }
 
 fn cmd_reopen(args: cli::IdArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
-    cmd_set_status(&args.id, exact, ticket::Status::Open, "Reopened", dry_run, pretty)
+    cmd_set_status(
+        &args.id,
+        exact,
+        ticket::Status::Open,
+        "Reopened",
+        dry_run,
+        pretty,
+    )
 }
 
 fn cmd_dep_tree(args: cli::TreeArgs, exact: bool, pretty: bool) -> Result<()> {
@@ -1165,7 +1172,9 @@ fn dispatch(cli: Cli) -> Result<()> {
                 Commands::IsReady(args) => cmd_is_ready(args, exact),
                 Commands::AddNote(args) => cmd_add_note(args, exact, pretty),
                 Commands::Dep(dep_args) => match dep_args.command {
-                    cli::DepCommands::Add(add_args) => cmd_dep_add(add_args, exact, dry_run, pretty),
+                    cli::DepCommands::Add(add_args) => {
+                        cmd_dep_add(add_args, exact, dry_run, pretty)
+                    }
                     cli::DepCommands::Tree(args) => cmd_dep_tree(args, exact, pretty),
                     cli::DepCommands::Cycle => cmd_dep_cycle(),
                 },
@@ -1241,18 +1250,40 @@ fn main() {
 fn available_flags_for_command(subcmd: &str) -> Vec<&'static str> {
     match subcmd {
         "list" | "ready" | "blocked" => vec![
-            "--status", "--tag", "--type", "--priority", "--assignee",
-            "--limit", "--pluck", "--count", "--full",
+            "--status",
+            "--tag",
+            "--type",
+            "--priority",
+            "--assignee",
+            "--limit",
+            "--pluck",
+            "--count",
+            "--full",
         ],
         "closed" => vec!["--limit", "--pluck", "--count", "--full"],
         "create" => vec![
-            "--id", "--priority", "--tags", "--type", "--assignee",
-            "--estimate", "--description", "--parent", "--dep",
-            "--json", "--batch",
+            "--id",
+            "--priority",
+            "--tags",
+            "--type",
+            "--assignee",
+            "--estimate",
+            "--description",
+            "--parent",
+            "--dep",
+            "--json",
+            "--batch",
         ],
         "update" => vec![
-            "--title", "--priority", "--tags", "--type", "--assignee",
-            "--estimate", "--description", "--status", "--version",
+            "--title",
+            "--priority",
+            "--tags",
+            "--type",
+            "--assignee",
+            "--estimate",
+            "--description",
+            "--status",
+            "--version",
             "--json",
         ],
         "show" => vec![],
@@ -1285,10 +1316,7 @@ mod tests {
     }
 
     /// Mirror of cmd_list that writes output to an arbitrary writer.
-    fn cmd_list_to_writer<W: std::io::Write>(
-        args: cli::FilterArgs,
-        w: &mut W,
-    ) -> Result<()> {
+    fn cmd_list_to_writer<W: std::io::Write>(args: cli::FilterArgs, w: &mut W) -> Result<()> {
         let st = store::Store::open()?;
         let mut tickets = st.read_all()?;
         deps::compute_reverse_fields(&mut tickets);
@@ -1298,10 +1326,7 @@ mod tests {
     }
 
     /// Mirror of cmd_ready that writes output to an arbitrary writer.
-    fn cmd_ready_to_writer<W: std::io::Write>(
-        args: cli::FilterArgs,
-        w: &mut W,
-    ) -> Result<()> {
+    fn cmd_ready_to_writer<W: std::io::Write>(args: cli::FilterArgs, w: &mut W) -> Result<()> {
         let st = store::Store::open()?;
         let mut tickets = st.read_all()?;
         deps::compute_reverse_fields(&mut tickets);
@@ -1320,10 +1345,7 @@ mod tests {
     }
 
     /// Mirror of cmd_blocked that writes output to an arbitrary writer.
-    fn cmd_blocked_to_writer<W: std::io::Write>(
-        args: cli::FilterArgs,
-        w: &mut W,
-    ) -> Result<()> {
+    fn cmd_blocked_to_writer<W: std::io::Write>(args: cli::FilterArgs, w: &mut W) -> Result<()> {
         let st = store::Store::open()?;
         let mut tickets = st.read_all()?;
         deps::compute_reverse_fields(&mut tickets);
@@ -1490,10 +1512,7 @@ mod tests {
         let tickets = st.read_all().unwrap();
         assert_eq!(tickets.len(), 1);
         assert_eq!(tickets[0].title, "From --title flag");
-        assert_eq!(
-            tickets[0].description.as_deref(),
-            Some("From --body alias")
-        );
+        assert_eq!(tickets[0].description.as_deref(), Some("From --body alias"));
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -1557,7 +1576,10 @@ mod tests {
         // Verify error JSON has correct structure
         let json = error::error_json(&err);
         assert_eq!(json["error"], "id_exists");
-        assert!(json["suggestion"].as_str().unwrap().contains("different --id"));
+        assert!(json["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("different --id"));
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -3489,7 +3511,13 @@ notes: []
             cmd_create(a, false, false, false).unwrap();
         }
         for i in 0..25u32 {
-            cmd_close(close_args(vec![&format!("clsdlm-{:02}", i)]), true, false, false).unwrap();
+            cmd_close(
+                close_args(vec![&format!("clsdlm-{:02}", i)]),
+                true,
+                false,
+                false,
+            )
+            .unwrap();
         }
 
         let result = cmd_closed(closed_args_default(), false);
@@ -3577,10 +3605,7 @@ notes: []
         let arr = parsed.as_array().expect("expected JSON array");
         let ids: Vec<&str> = arr.iter().map(|v| v["id"].as_str().unwrap()).collect();
         // A is closed so not in ready list; B is now ready
-        assert!(
-            !ids.contains(&"rca-a"),
-            "A is closed, not in ready list"
-        );
+        assert!(!ids.contains(&"rca-a"), "A is closed, not in ready list");
         assert!(
             ids.contains(&"rca-b"),
             "B should be ready after A is closed"

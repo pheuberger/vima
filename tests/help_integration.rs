@@ -87,7 +87,9 @@ fn unrecognized_flag_includes_available_flags() {
     let err: serde_json::Value =
         serde_json::from_str(stderr.trim()).expect("stderr should be JSON");
     assert_eq!(err["error"], "invalid_argument");
-    let flags = err["available_flags"].as_array().expect("should have available_flags");
+    let flags = err["available_flags"]
+        .as_array()
+        .expect("should have available_flags");
     assert!(
         flags.iter().any(|f| f == "--pluck"),
         "available_flags should include --pluck"

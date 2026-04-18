@@ -186,10 +186,7 @@ fn start_no_assignee_on_claimed_ticket_returns_exit_6() {
         .unwrap();
 
     // Bare start without assignee on a claimed ticket
-    let output = vima_cmd(&tmp)
-        .args(["start", &id])
-        .output()
-        .unwrap();
+    let output = vima_cmd(&tmp).args(["start", &id]).output().unwrap();
 
     assert_eq!(
         output.status.code().unwrap(),
@@ -273,22 +270,17 @@ fn update_nonexistent_ticket_returns_exit_3_with_json_error() {
     let err_json: serde_json::Value =
         serde_json::from_str(stderr.trim()).expect("stderr should be valid JSON");
     assert_eq!(err_json["error"], "not_found");
-    assert!(
-        err_json["suggestion"]
-            .as_str()
-            .unwrap()
-            .contains("vima list")
-    );
+    assert!(err_json["suggestion"]
+        .as_str()
+        .unwrap()
+        .contains("vima list"));
 }
 
 #[test]
 fn start_nonexistent_ticket_returns_exit_3() {
     let tmp = setup_store();
 
-    let output = vima_cmd(&tmp)
-        .args(["start", "ci-9999"])
-        .output()
-        .unwrap();
+    let output = vima_cmd(&tmp).args(["start", "ci-9999"]).output().unwrap();
 
     assert_eq!(
         output.status.code().unwrap(),
