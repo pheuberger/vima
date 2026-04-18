@@ -21,7 +21,7 @@ pub(crate) fn parse_tags(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool) -> Result<()> {
+fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
     // Merge --title flag into positional title (flag takes precedence)
     if args.title.is_none() {
         args.title = args.title_flag.take();
@@ -194,7 +194,9 @@ fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool) -> Result<(
         st.write_ticket(&target)?;
     }
 
-    eprintln!("Created {}", ticket_id);
+    if pretty {
+        eprintln!("Created {}", ticket_id);
+    }
     output::output_one(&ticket, &None)?;
 
     Ok(())
@@ -212,7 +214,7 @@ fn cmd_show(args: cli::ShowArgs, exact: bool, pretty: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_add_note(args: cli::AddNoteArgs, exact: bool) -> Result<()> {
+fn cmd_add_note(args: cli::AddNoteArgs, exact: bool, pretty: bool) -> Result<()> {
     use std::io::Read;
 
     let st = store::Store::open()?;
@@ -238,13 +240,15 @@ fn cmd_add_note(args: cli::AddNoteArgs, exact: bool) -> Result<()> {
     st.write_ticket(&ticket)?;
 
     let updated = st.load_and_compute(&resolved)?;
-    eprintln!("Added note to {}", resolved);
+    if pretty {
+        eprintln!("Added note to {}", resolved);
+    }
     output::output_one(&updated, &None)?;
 
     Ok(())
 }
 
-fn cmd_link(args: cli::LinkArgs, exact: bool) -> Result<()> {
+fn cmd_link(args: cli::LinkArgs, exact: bool, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let id_a = st.resolve_id(&args.id_a, exact)?;
     let id_b = st.resolve_id(&args.id_b, exact)?;
@@ -268,13 +272,15 @@ fn cmd_link(args: cli::LinkArgs, exact: bool) -> Result<()> {
 
     let updated_a = st.load_and_compute(&id_a)?;
     let updated_b = st.load_and_compute(&id_b)?;
-    eprintln!("Linked {} \u{2194} {}", id_a, id_b);
+    if pretty {
+        eprintln!("Linked {} \u{2194} {}", id_a, id_b);
+    }
     output::output_many(&[updated_a, updated_b], &None, false)?;
 
     Ok(())
 }
 
-fn cmd_unlink(args: cli::LinkArgs, exact: bool) -> Result<()> {
+fn cmd_unlink(args: cli::LinkArgs, exact: bool, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let id_a = st.resolve_id(&args.id_a, exact)?;
     let id_b = st.resolve_id(&args.id_b, exact)?;
@@ -293,13 +299,15 @@ fn cmd_unlink(args: cli::LinkArgs, exact: bool) -> Result<()> {
 
     let updated_a = st.load_and_compute(&id_a)?;
     let updated_b = st.load_and_compute(&id_b)?;
-    eprintln!("Unlinked {} \u{2194} {}", id_a, id_b);
+    if pretty {
+        eprintln!("Unlinked {} \u{2194} {}", id_a, id_b);
+    }
     output::output_many(&[updated_a, updated_b], &None, false)?;
 
     Ok(())
 }
 
-fn cmd_dep_add(args: cli::AddDepArgs, exact: bool, dry_run: bool) -> Result<()> {
+fn cmd_dep_add(args: cli::AddDepArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let id = st.resolve_id(&args.id, exact)?;
     let dep_id = st.resolve_id(&args.dep_id, exact)?;
@@ -342,17 +350,19 @@ fn cmd_dep_add(args: cli::AddDepArgs, exact: bool, dry_run: bool) -> Result<()> 
     st.write_ticket(&target)?;
 
     let updated = st.load_and_compute(&target_id)?;
-    if args.blocks {
-        eprintln!("Added dep {} to {}", id, dep_id);
-    } else {
-        eprintln!("Added dep {} to {}", dep_id, id);
+    if pretty {
+        if args.blocks {
+            eprintln!("Added dep {} to {}", id, dep_id);
+        } else {
+            eprintln!("Added dep {} to {}", dep_id, id);
+        }
     }
     output::output_one(&updated, &None)?;
 
     Ok(())
 }
 
-fn cmd_undep(args: cli::UndepArgs, exact: bool) -> Result<()> {
+fn cmd_undep(args: cli::UndepArgs, exact: bool, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let id = st.resolve_id(&args.id, exact)?;
     let dep_id = st.resolve_id(&args.dep_id, exact)?;
@@ -367,13 +377,15 @@ fn cmd_undep(args: cli::UndepArgs, exact: bool) -> Result<()> {
     st.write_ticket(&ticket)?;
 
     let updated = st.load_and_compute(&id)?;
-    eprintln!("Removed dep {} from {}", dep_id, id);
+    if pretty {
+        eprintln!("Removed dep {} from {}", dep_id, id);
+    }
     output::output_one(&updated, &None)?;
 
     Ok(())
 }
 
-fn cmd_update(mut args: cli::UpdateArgs, exact: bool, dry_run: bool) -> Result<()> {
+fn cmd_update(mut args: cli::UpdateArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
     if let Some(ref json_str) = args.json {
         let obj: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| Error::Yaml(format!("invalid --json: {e}")))?;
@@ -495,7 +507,9 @@ fn cmd_update(mut args: cli::UpdateArgs, exact: bool, dry_run: bool) -> Result<(
 
     st.write_ticket(&ticket)?;
     let updated = st.load_and_compute(&resolved)?;
-    eprintln!("Updated {}", resolved);
+    if pretty {
+        eprintln!("Updated {}", resolved);
+    }
     output::output_one(&updated, &None)?;
 
     Ok(())
@@ -507,6 +521,7 @@ fn cmd_set_status(
     target: ticket::Status,
     verb: &str,
     dry_run: bool,
+    pretty: bool,
 ) -> Result<()> {
     let st = store::Store::open()?;
     let resolved = st.resolve_id(id, exact)?;
@@ -532,13 +547,15 @@ fn cmd_set_status(
 
     st.write_ticket(&ticket)?;
     let updated = st.load_and_compute(&resolved)?;
-    eprintln!("{} {}", verb, resolved);
+    if pretty {
+        eprintln!("{} {}", verb, resolved);
+    }
     output::output_one(&updated, &None)?;
 
     Ok(())
 }
 
-fn cmd_start(args: cli::StartArgs, exact: bool, dry_run: bool) -> Result<()> {
+fn cmd_start(args: cli::StartArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let resolved = st.resolve_id(&args.id, exact)?;
     let mut ticket = st.read_ticket(&resolved)?;
@@ -586,13 +603,15 @@ fn cmd_start(args: cli::StartArgs, exact: bool, dry_run: bool) -> Result<()> {
 
     st.write_ticket(&ticket)?;
     let updated = st.load_and_compute(&resolved)?;
-    eprintln!("Started {}", resolved);
+    if pretty {
+        eprintln!("Started {}", resolved);
+    }
     output::output_one(&updated, &None)?;
 
     Ok(())
 }
 
-fn cmd_close(args: cli::CloseArgs, exact: bool, dry_run: bool) -> Result<()> {
+fn cmd_close(args: cli::CloseArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let mut closed_tickets = Vec::new();
 
@@ -619,7 +638,9 @@ fn cmd_close(args: cli::CloseArgs, exact: bool, dry_run: bool) -> Result<()> {
         }
         st.write_ticket(&ticket)?;
         let updated = st.load_and_compute(&resolved)?;
-        eprintln!("Closed {}", resolved);
+        if pretty {
+            eprintln!("Closed {}", resolved);
+        }
         closed_tickets.push(updated);
     }
 
@@ -638,8 +659,8 @@ fn cmd_close(args: cli::CloseArgs, exact: bool, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_reopen(args: cli::IdArgs, exact: bool, dry_run: bool) -> Result<()> {
-    cmd_set_status(&args.id, exact, ticket::Status::Open, "Reopened", dry_run)
+fn cmd_reopen(args: cli::IdArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+    cmd_set_status(&args.id, exact, ticket::Status::Open, "Reopened", dry_run, pretty)
 }
 
 fn cmd_dep_tree(args: cli::TreeArgs, exact: bool, pretty: bool) -> Result<()> {
@@ -669,7 +690,7 @@ fn cmd_dep_cycle() -> Result<()> {
     Ok(())
 }
 
-fn cmd_init(_args: cli::InitArgs) -> Result<()> {
+fn cmd_init(_args: cli::InitArgs, pretty: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let vima_dir = cwd.join(".vima");
     let tickets_dir = vima_dir.join("tickets");
@@ -682,7 +703,9 @@ fn cmd_init(_args: cli::InitArgs) -> Result<()> {
         std::fs::write(&config_path, format!("prefix: {}\n", prefix))?;
     }
 
-    eprintln!("Initialized vima in .vima/");
+    if pretty {
+        eprintln!("Initialized vima in .vima/");
+    }
     Ok(())
 }
 
@@ -1129,26 +1152,26 @@ fn dispatch(cli: Cli) -> Result<()> {
             };
             // Lock is held while the command runs, then released on drop
             return match cli.command {
-                Commands::Create(args) => cmd_create(args, exact, dry_run),
+                Commands::Create(args) => cmd_create(args, exact, dry_run, pretty),
                 Commands::Show(args) => cmd_show(args, exact, pretty),
                 Commands::List(args) => cmd_list(args, pretty),
                 Commands::Ready(args) => cmd_ready(args, pretty),
                 Commands::Blocked(args) => cmd_blocked(args, pretty),
                 Commands::Closed(args) => cmd_closed(args, pretty),
-                Commands::Update(args) => cmd_update(args, exact, dry_run),
-                Commands::Start(args) => cmd_start(args, exact, dry_run),
-                Commands::Close(args) => cmd_close(args, exact, dry_run),
-                Commands::Reopen(args) => cmd_reopen(args, exact, dry_run),
+                Commands::Update(args) => cmd_update(args, exact, dry_run, pretty),
+                Commands::Start(args) => cmd_start(args, exact, dry_run, pretty),
+                Commands::Close(args) => cmd_close(args, exact, dry_run, pretty),
+                Commands::Reopen(args) => cmd_reopen(args, exact, dry_run, pretty),
                 Commands::IsReady(args) => cmd_is_ready(args, exact),
-                Commands::AddNote(args) => cmd_add_note(args, exact),
+                Commands::AddNote(args) => cmd_add_note(args, exact, pretty),
                 Commands::Dep(dep_args) => match dep_args.command {
-                    cli::DepCommands::Add(add_args) => cmd_dep_add(add_args, exact, dry_run),
+                    cli::DepCommands::Add(add_args) => cmd_dep_add(add_args, exact, dry_run, pretty),
                     cli::DepCommands::Tree(args) => cmd_dep_tree(args, exact, pretty),
                     cli::DepCommands::Cycle => cmd_dep_cycle(),
                 },
-                Commands::Undep(args) => cmd_undep(args, exact),
-                Commands::Link(args) => cmd_link(args, exact),
-                Commands::Unlink(args) => cmd_unlink(args, exact),
+                Commands::Undep(args) => cmd_undep(args, exact, pretty),
+                Commands::Link(args) => cmd_link(args, exact, pretty),
+                Commands::Unlink(args) => cmd_unlink(args, exact, pretty),
                 _ => unreachable!(),
             };
         }
@@ -1156,7 +1179,7 @@ fn dispatch(cli: Cli) -> Result<()> {
 
     // Non-store commands (Init, Help, External) run without locking
     match cli.command {
-        Commands::Init(args) => cmd_init(args),
+        Commands::Init(args) => cmd_init(args, pretty),
         Commands::Help(args) => cmd_help(args),
         Commands::External(args) => {
             let cmd = &args[0];
@@ -1329,7 +1352,7 @@ mod tests {
         std::env::set_current_dir(tmp.path()).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init(init_args()).unwrap();
+        cmd_init(init_args(), false).unwrap();
 
         assert!(tmp.path().join(".vima").is_dir());
         assert!(tmp.path().join(".vima/tickets").is_dir());
@@ -1345,7 +1368,7 @@ mod tests {
         std::env::set_current_dir(&project_dir).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init(init_args()).unwrap();
+        cmd_init(init_args(), false).unwrap();
 
         let config = std::fs::read_to_string(project_dir.join(".vima/config.yml")).unwrap();
         assert!(config.contains("prefix: mp"), "config was: {config}");
@@ -1358,13 +1381,13 @@ mod tests {
         std::env::set_current_dir(tmp.path()).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init(init_args()).unwrap();
+        cmd_init(init_args(), false).unwrap();
 
         // Overwrite config with custom prefix
         std::fs::write(tmp.path().join(".vima/config.yml"), "prefix: custom\n").unwrap();
 
         // Run init again — must not overwrite config
-        cmd_init(init_args()).unwrap();
+        cmd_init(init_args(), false).unwrap();
 
         let config = std::fs::read_to_string(tmp.path().join(".vima/config.yml")).unwrap();
         assert!(config.contains("prefix: custom"), "config was: {config}");
@@ -1377,8 +1400,8 @@ mod tests {
         std::env::set_current_dir(tmp.path()).unwrap();
         std::env::remove_var("VIMA_DIR");
 
-        cmd_init(init_args()).unwrap();
-        cmd_init(init_args()).unwrap();
+        cmd_init(init_args(), false).unwrap();
+        cmd_init(init_args(), false).unwrap();
     }
 
     // ── create command tests ─────────────────────────────────────────────────
@@ -1421,7 +1444,7 @@ mod tests {
         args.ticket_type = Some(ticket::TicketType::Bug);
         args.priority = Some(1);
 
-        let result = cmd_create(args, false, false);
+        let result = cmd_create(args, false, false, false);
         assert!(result.is_ok(), "create failed: {:?}", result);
 
         let tickets_dir = tmp.path().join(".vima/tickets");
@@ -1460,7 +1483,7 @@ mod tests {
         args.title_flag = Some("From --title flag".to_string());
         args.description = Some("From --body alias".to_string());
 
-        let result = cmd_create(args, false, false);
+        let result = cmd_create(args, false, false, false);
         assert!(result.is_ok(), "create failed: {:?}", result);
 
         let st = store::Store::open().unwrap();
@@ -1484,7 +1507,7 @@ mod tests {
         let mut args = create_args(Some("Test"));
         args.id = Some("my-id-01".to_string());
 
-        cmd_create(args, false, false).unwrap();
+        cmd_create(args, false, false, false).unwrap();
 
         let ticket_path = tmp.path().join(".vima/tickets/my-id-01.md");
         assert!(ticket_path.exists());
@@ -1503,7 +1526,7 @@ mod tests {
         setup_vima(&tmp);
 
         let args = create_args(None);
-        let result = cmd_create(args, false, false);
+        let result = cmd_create(args, false, false, false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code(), "invalid_field");
@@ -1520,11 +1543,11 @@ mod tests {
 
         let mut args1 = create_args(Some("First"));
         args1.id = Some("dup-id-01".to_string());
-        cmd_create(args1, false, false).unwrap();
+        cmd_create(args1, false, false, false).unwrap();
 
         let mut args2 = create_args(Some("Second with same ID"));
         args2.id = Some("dup-id-01".to_string());
-        let result = cmd_create(args2, false, false);
+        let result = cmd_create(args2, false, false, false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code(), "id_exists");
@@ -1554,7 +1577,7 @@ mod tests {
         let mut args = create_args(Some("A"));
         args.priority = Some(5);
 
-        let result = cmd_create(args, false, false);
+        let result = cmd_create(args, false, false, false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code(), "invalid_field");
@@ -1573,7 +1596,7 @@ mod tests {
         args.tags = Some("backend,auth".to_string());
         args.id = Some("tagged-01".to_string());
 
-        cmd_create(args, false, false).unwrap();
+        cmd_create(args, false, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("tagged-01").unwrap();
@@ -1590,12 +1613,12 @@ mod tests {
 
         let mut dep_args = create_args(Some("Existing dep"));
         dep_args.id = Some("dep-01".to_string());
-        cmd_create(dep_args, false, false).unwrap();
+        cmd_create(dep_args, false, false, false).unwrap();
 
         let mut args = create_args(Some("Dependent"));
         args.id = Some("dep-02".to_string());
         args.dep = vec!["dep-01".to_string()];
-        cmd_create(args, true, false).unwrap();
+        cmd_create(args, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("dep-02").unwrap();
@@ -1618,7 +1641,7 @@ mod tests {
                 .to_string(),
         );
 
-        let result = cmd_create(args, false, false);
+        let result = cmd_create(args, false, false, false);
         assert!(result.is_ok(), "create --json failed: {:?}", result);
 
         let st = store::Store::open().unwrap();
@@ -1638,7 +1661,7 @@ mod tests {
         let mut args = create_args(None);
         args.json = Some("not valid json".to_string());
 
-        let result = cmd_create(args, false, false);
+        let result = cmd_create(args, false, false, false);
         assert!(result.is_err());
     }
 
@@ -1650,11 +1673,11 @@ mod tests {
 
         let mut ca = create_args(Some("Original"));
         ca.id = Some("vi-ujsn".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("vi-ujsn");
         ua.json = Some(r#"{"title":"Updated via JSON","priority":0}"#.to_string());
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("vi-ujsn").unwrap();
@@ -1673,7 +1696,7 @@ mod tests {
         let mut args = create_args(Some("Dry run ticket"));
         args.id = Some("vi-dryc".to_string());
 
-        let result = cmd_create(args, false, true);
+        let result = cmd_create(args, false, true, false);
         assert!(result.is_ok(), "dry-run create failed: {:?}", result);
 
         // Ticket should NOT exist on disk
@@ -1689,11 +1712,11 @@ mod tests {
 
         let mut ca = create_args(Some("Before dry-run"));
         ca.id = Some("vi-dryu".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("vi-dryu");
         ua.title = Some("After dry-run".to_string());
-        cmd_update(ua, true, true).unwrap();
+        cmd_update(ua, true, true, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("vi-dryu").unwrap();
@@ -1711,9 +1734,9 @@ mod tests {
 
         let mut ca = create_args(Some("Dry close"));
         ca.id = Some("vi-drcl".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
-        cmd_close(close_args(vec!["vi-drcl"]), true, true).unwrap();
+        cmd_close(close_args(vec!["vi-drcl"]), true, true, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("vi-drcl").unwrap();
@@ -1741,7 +1764,7 @@ mod tests {
 
         let mut args = create_args(Some("Show me"));
         args.id = Some("show-01".to_string());
-        cmd_create(args, false, false).unwrap();
+        cmd_create(args, false, false, false).unwrap();
 
         let result = cmd_show(show_args("show-01"), true, false);
         assert!(result.is_ok(), "show failed: {:?}", result);
@@ -1757,7 +1780,7 @@ mod tests {
 
         let mut args = create_args(Some("Partial match"));
         args.id = Some("partial-01".to_string());
-        cmd_create(args, false, false).unwrap();
+        cmd_create(args, false, false, false).unwrap();
 
         // Use prefix "partial" which should resolve to "partial-01"
         let result = cmd_show(show_args("partial"), false, false);
@@ -1774,7 +1797,7 @@ mod tests {
 
         let mut args = create_args(Some("Exact check"));
         args.id = Some("exact-01".to_string());
-        cmd_create(args, false, false).unwrap();
+        cmd_create(args, false, false, false).unwrap();
 
         let result = cmd_show(show_args("exact"), true, false);
         assert!(
@@ -1795,7 +1818,7 @@ mod tests {
 
         let mut args = create_args(Some("Pluck me"));
         args.id = Some("pluck-01".to_string());
-        cmd_create(args, false, false).unwrap();
+        cmd_create(args, false, false, false).unwrap();
 
         let mut sa = show_args("pluck-01");
         sa.pluck = Some("title".to_string());
@@ -1813,7 +1836,7 @@ mod tests {
 
         let mut args = create_args(Some("Multi pluck"));
         args.id = Some("mpluck-01".to_string());
-        cmd_create(args, false, false).unwrap();
+        cmd_create(args, false, false, false).unwrap();
 
         let mut sa = show_args("mpluck-01");
         sa.pluck = Some("title,priority".to_string());
@@ -1836,18 +1859,18 @@ mod tests {
         // Create parent and child tickets
         let mut parent_args = create_args(Some("Parent"));
         parent_args.id = Some("parent-01".to_string());
-        cmd_create(parent_args, false, false).unwrap();
+        cmd_create(parent_args, false, false, false).unwrap();
 
         // Create blocker and blocked ticket
         let mut blocker_args = create_args(Some("Blocker"));
         blocker_args.id = Some("blocker-01".to_string());
-        cmd_create(blocker_args, false, false).unwrap();
+        cmd_create(blocker_args, false, false, false).unwrap();
 
         let mut blocked_args = create_args(Some("Blocked"));
         blocked_args.id = Some("blocked-01".to_string());
         blocked_args.dep = vec!["blocker-01".to_string()];
         blocked_args.parent = Some("parent-01".to_string());
-        cmd_create(blocked_args, true, false).unwrap();
+        cmd_create(blocked_args, true, false, false).unwrap();
 
         // Show the blocker — its `blocks` should contain "blocked-01"
         let st = store::Store::open().unwrap();
@@ -1907,9 +1930,9 @@ mod tests {
 
         let mut args = create_args(Some("Ticket with note"));
         args.id = Some("note-01".to_string());
-        cmd_create(args, false, false).unwrap();
+        cmd_create(args, false, false, false).unwrap();
 
-        cmd_add_note(add_note_args("note-01", Some("My note")), true).unwrap();
+        cmd_add_note(add_note_args("note-01", Some("My note")), true, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("note-01").unwrap();
@@ -1928,10 +1951,10 @@ mod tests {
 
         let mut args = create_args(Some("Multi-note ticket"));
         args.id = Some("note-02".to_string());
-        cmd_create(args, false, false).unwrap();
+        cmd_create(args, false, false, false).unwrap();
 
-        cmd_add_note(add_note_args("note-02", Some("First note")), true).unwrap();
-        cmd_add_note(add_note_args("note-02", Some("Second note")), true).unwrap();
+        cmd_add_note(add_note_args("note-02", Some("First note")), true, false).unwrap();
+        cmd_add_note(add_note_args("note-02", Some("Second note")), true, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("note-02").unwrap();
@@ -1950,9 +1973,9 @@ mod tests {
 
         let mut args = create_args(Some("Empty note ticket"));
         args.id = Some("note-03".to_string());
-        cmd_create(args, false, false).unwrap();
+        cmd_create(args, false, false, false).unwrap();
 
-        let result = cmd_add_note(add_note_args("note-03", Some("")), true);
+        let result = cmd_add_note(add_note_args("note-03", Some("")), true, false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code(), "invalid_field");
@@ -1967,7 +1990,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         setup_vima(&tmp);
 
-        let result = cmd_add_note(add_note_args("nonexistent", Some("note")), true);
+        let result = cmd_add_note(add_note_args("nonexistent", Some("note")), true, false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code(), "not_found");
@@ -1985,13 +2008,13 @@ mod tests {
 
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("link-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("link-b".to_string());
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
-        cmd_link(link_args("link-a", "link-b"), true).unwrap();
+        cmd_link(link_args("link-a", "link-b"), true, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ta = st.read_ticket("link-a").unwrap();
@@ -2010,14 +2033,14 @@ mod tests {
 
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("idem-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("idem-b".to_string());
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
-        cmd_link(link_args("idem-a", "idem-b"), true).unwrap();
-        cmd_link(link_args("idem-a", "idem-b"), true).unwrap();
+        cmd_link(link_args("idem-a", "idem-b"), true, false).unwrap();
+        cmd_link(link_args("idem-a", "idem-b"), true, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ta = st.read_ticket("idem-a").unwrap();
@@ -2036,9 +2059,9 @@ mod tests {
 
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("exists-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
-        let result = cmd_link(link_args("exists-a", "does-not-exist"), true);
+        let result = cmd_link(link_args("exists-a", "does-not-exist"), true, false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code(), "not_found");
@@ -2061,14 +2084,14 @@ mod tests {
 
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("ul-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("ul-b".to_string());
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
-        cmd_link(link_args("ul-a", "ul-b"), true).unwrap();
-        cmd_unlink(link_args("ul-a", "ul-b"), true).unwrap();
+        cmd_link(link_args("ul-a", "ul-b"), true, false).unwrap();
+        cmd_unlink(link_args("ul-a", "ul-b"), true, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ta = st.read_ticket("ul-a").unwrap();
@@ -2087,14 +2110,14 @@ mod tests {
 
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("nul-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("nul-b".to_string());
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
         // Unlink when never linked — should succeed without error
-        let result = cmd_unlink(link_args("nul-a", "nul-b"), true);
+        let result = cmd_unlink(link_args("nul-a", "nul-b"), true, false);
         assert!(result.is_ok());
 
         std::env::remove_var("VIMA_DIR");
@@ -2125,13 +2148,13 @@ mod tests {
 
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("da-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("da-b".to_string());
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
-        cmd_dep_add(add_dep_args("da-a", "da-b", false), true, false).unwrap();
+        cmd_dep_add(add_dep_args("da-a", "da-b", false), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket_a = st.read_ticket("da-a").unwrap();
@@ -2148,14 +2171,14 @@ mod tests {
 
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("db-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("db-b".to_string());
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
         // A blocks B → B's deps should contain A
-        cmd_dep_add(add_dep_args("db-a", "db-b", true), true, false).unwrap();
+        cmd_dep_add(add_dep_args("db-a", "db-b", true), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket_b = st.read_ticket("db-b").unwrap();
@@ -2172,14 +2195,14 @@ mod tests {
 
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("dd-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("dd-b".to_string());
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
-        cmd_dep_add(add_dep_args("dd-a", "dd-b", false), true, false).unwrap();
-        cmd_dep_add(add_dep_args("dd-a", "dd-b", false), true, false).unwrap();
+        cmd_dep_add(add_dep_args("dd-a", "dd-b", false), true, false, false).unwrap();
+        cmd_dep_add(add_dep_args("dd-a", "dd-b", false), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket_a = st.read_ticket("dd-a").unwrap();
@@ -2201,20 +2224,20 @@ mod tests {
         // Create A -> B -> C chain
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("cy-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("cy-b".to_string());
         b.dep = vec!["cy-a".to_string()];
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         let mut c = create_args(Some("Ticket C"));
         c.id = Some("cy-c".to_string());
         c.dep = vec!["cy-b".to_string()];
-        cmd_create(c, true, false).unwrap();
+        cmd_create(c, true, false, false).unwrap();
 
         // Adding A -> C (A depends on C) would create A -> C -> B -> A cycle
-        let result = cmd_dep_add(add_dep_args("cy-a", "cy-c", false), true, false);
+        let result = cmd_dep_add(add_dep_args("cy-a", "cy-c", false), true, false, false);
         assert!(result.is_err(), "expected cycle error");
         let err = result.unwrap_err();
         assert_eq!(err.code(), "cycle");
@@ -2238,14 +2261,14 @@ mod tests {
 
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("ud-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("ud-b".to_string());
         b.dep = vec!["ud-a".to_string()];
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
-        cmd_undep(undep_args("ud-b", "ud-a"), true).unwrap();
+        cmd_undep(undep_args("ud-b", "ud-a"), true, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket_b = st.read_ticket("ud-b").unwrap();
@@ -2262,13 +2285,13 @@ mod tests {
 
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("ue-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("ue-b".to_string());
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
-        let result = cmd_undep(undep_args("ue-a", "ue-b"), true);
+        let result = cmd_undep(undep_args("ue-a", "ue-b"), true, false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code(), "invalid_field");
@@ -2285,12 +2308,12 @@ mod tests {
 
         let mut target_args = create_args(Some("Target"));
         target_args.id = Some("target-01".to_string());
-        cmd_create(target_args, false, false).unwrap();
+        cmd_create(target_args, false, false, false).unwrap();
 
         let mut args = create_args(Some("Blocker"));
         args.id = Some("blocker-01".to_string());
         args.blocks = vec!["target-01".to_string()];
-        cmd_create(args, true, false).unwrap();
+        cmd_create(args, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let target = st.read_ticket("target-01").unwrap();
@@ -2309,18 +2332,18 @@ mod tests {
 
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("tr-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("tr-b".to_string());
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
         let mut c = create_args(Some("Ticket C"));
         c.id = Some("tr-c".to_string());
-        cmd_create(c, false, false).unwrap();
+        cmd_create(c, false, false, false).unwrap();
 
-        cmd_dep_add(add_dep_args("tr-a", "tr-b", false), true, false).unwrap();
-        cmd_dep_add(add_dep_args("tr-b", "tr-c", false), true, false).unwrap();
+        cmd_dep_add(add_dep_args("tr-a", "tr-b", false), true, false, false).unwrap();
+        cmd_dep_add(add_dep_args("tr-b", "tr-c", false), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let tickets = st.read_all().unwrap();
@@ -2345,14 +2368,14 @@ mod tests {
         for id in &["td-a", "td-b", "td-c", "td-d"] {
             let mut args = create_args(Some(&format!("Ticket {id}")));
             args.id = Some(id.to_string());
-            cmd_create(args, false, false).unwrap();
+            cmd_create(args, false, false, false).unwrap();
         }
 
         // A→B, A→C, B→D, C→D
-        cmd_dep_add(add_dep_args("td-a", "td-b", false), true, false).unwrap();
-        cmd_dep_add(add_dep_args("td-a", "td-c", false), true, false).unwrap();
-        cmd_dep_add(add_dep_args("td-b", "td-d", false), true, false).unwrap();
-        cmd_dep_add(add_dep_args("td-c", "td-d", false), true, false).unwrap();
+        cmd_dep_add(add_dep_args("td-a", "td-b", false), true, false, false).unwrap();
+        cmd_dep_add(add_dep_args("td-a", "td-c", false), true, false, false).unwrap();
+        cmd_dep_add(add_dep_args("td-b", "td-d", false), true, false, false).unwrap();
+        cmd_dep_add(add_dep_args("td-c", "td-d", false), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let tickets = st.read_all().unwrap();
@@ -2389,13 +2412,13 @@ mod tests {
         for id in &["tf-a", "tf-b", "tf-c", "tf-d"] {
             let mut args = create_args(Some(&format!("Ticket {id}")));
             args.id = Some(id.to_string());
-            cmd_create(args, false, false).unwrap();
+            cmd_create(args, false, false, false).unwrap();
         }
 
-        cmd_dep_add(add_dep_args("tf-a", "tf-b", false), true, false).unwrap();
-        cmd_dep_add(add_dep_args("tf-a", "tf-c", false), true, false).unwrap();
-        cmd_dep_add(add_dep_args("tf-b", "tf-d", false), true, false).unwrap();
-        cmd_dep_add(add_dep_args("tf-c", "tf-d", false), true, false).unwrap();
+        cmd_dep_add(add_dep_args("tf-a", "tf-b", false), true, false, false).unwrap();
+        cmd_dep_add(add_dep_args("tf-a", "tf-c", false), true, false, false).unwrap();
+        cmd_dep_add(add_dep_args("tf-b", "tf-d", false), true, false, false).unwrap();
+        cmd_dep_add(add_dep_args("tf-c", "tf-d", false), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let tickets = st.read_all().unwrap();
@@ -2424,7 +2447,7 @@ mod tests {
         // Create ticket A and manually add a dep to a non-existent ticket
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("tm-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         // Manually inject a dangling dep by writing the ticket with a bad dep
         let vima_dir = std::env::var("VIMA_DIR").unwrap();
@@ -2459,7 +2482,7 @@ mod tests {
         for id in &["tc-a", "tc-b"] {
             let mut args = create_args(Some(&format!("Ticket {id}")));
             args.id = Some(id.to_string());
-            cmd_create(args, false, false).unwrap();
+            cmd_create(args, false, false, false).unwrap();
         }
 
         let vima_dir = std::env::var("VIMA_DIR").unwrap();
@@ -2517,11 +2540,11 @@ mod tests {
 
         let mut ca = create_args(Some("Old title"));
         ca.id = Some("upd-01".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("upd-01");
         ua.title = Some("New title".to_string());
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("upd-01").unwrap();
@@ -2538,11 +2561,11 @@ mod tests {
 
         let mut ca = create_args(Some("Priority test"));
         ca.id = Some("upd-02".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("upd-02");
         ua.priority = Some(0);
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("upd-02").unwrap();
@@ -2559,11 +2582,11 @@ mod tests {
 
         let mut ca = create_args(Some("Priority test"));
         ca.id = Some("upd-03".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("upd-03");
         ua.priority = Some(5);
-        let result = cmd_update(ua, true, false);
+        let result = cmd_update(ua, true, false, false);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), "invalid_field");
 
@@ -2579,11 +2602,11 @@ mod tests {
         let mut ca = create_args(Some("Tags test"));
         ca.id = Some("upd-04".to_string());
         ca.tags = Some("old".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("upd-04");
         ua.tags = Some("a,b,c".to_string());
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("upd-04").unwrap();
@@ -2600,11 +2623,11 @@ mod tests {
 
         let mut ca = create_args(Some("Assignee test"));
         ca.id = Some("upd-05".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("upd-05");
         ua.assignee = Some("alice".to_string());
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("upd-05").unwrap();
@@ -2612,7 +2635,7 @@ mod tests {
 
         let mut ua2 = update_args("upd-05");
         ua2.assignee = Some("".to_string());
-        cmd_update(ua2, true, false).unwrap();
+        cmd_update(ua2, true, false, false).unwrap();
 
         let ticket2 = st.read_ticket("upd-05").unwrap();
         assert_eq!(ticket2.assignee, None);
@@ -2629,11 +2652,11 @@ mod tests {
         let mut ca = create_args(Some("Desc test"));
         ca.id = Some("upd-06".to_string());
         ca.description = Some("Some description".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("upd-06");
         ua.description = Some("".to_string());
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("upd-06").unwrap();
@@ -2650,11 +2673,11 @@ mod tests {
 
         let mut ca = create_args(Some("Status test"));
         ca.id = Some("upd-07".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("upd-07");
         ua.status = Some(ticket::Status::InProgress);
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("upd-07").unwrap();
@@ -2671,11 +2694,11 @@ mod tests {
 
         let mut ca = create_args(Some("Stderr test"));
         ca.id = Some("upd-08".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("upd-08");
         ua.title = Some("Updated title".to_string());
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("upd-08").unwrap();
@@ -2710,9 +2733,9 @@ mod tests {
 
         let mut ca = create_args(Some("Start test"));
         ca.id = Some("st-01".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
-        cmd_start(start_args("st-01"), true, false).unwrap();
+        cmd_start(start_args("st-01"), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("st-01").unwrap();
@@ -2729,10 +2752,10 @@ mod tests {
 
         let mut ca = create_args(Some("Start noop"));
         ca.id = Some("st-02".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
-        cmd_start(start_args("st-02"), true, false).unwrap();
-        let result = cmd_start(start_args("st-02"), true, false);
+        cmd_start(start_args("st-02"), true, false, false).unwrap();
+        let result = cmd_start(start_args("st-02"), true, false, false);
         assert!(result.is_ok(), "second start should succeed: {:?}", result);
 
         let st = store::Store::open().unwrap();
@@ -2750,11 +2773,11 @@ mod tests {
 
         let mut ca = create_args(Some("Claim test"));
         ca.id = Some("st-03".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let mut sa = start_args("st-03");
         sa.assignee = Some("agent-1".to_string());
-        cmd_start(sa, true, false).unwrap();
+        cmd_start(sa, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("st-03").unwrap();
@@ -2772,16 +2795,16 @@ mod tests {
 
         let mut ca = create_args(Some("Idempotent claim"));
         ca.id = Some("st-04".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let mut sa = start_args("st-04");
         sa.assignee = Some("agent-1".to_string());
-        cmd_start(sa, true, false).unwrap();
+        cmd_start(sa, true, false, false).unwrap();
 
         // Same assignee, second start — should succeed
         let mut sa2 = start_args("st-04");
         sa2.assignee = Some("agent-1".to_string());
-        let result = cmd_start(sa2, true, false);
+        let result = cmd_start(sa2, true, false, false);
         assert!(
             result.is_ok(),
             "same assignee re-start should succeed: {:?}",
@@ -2799,16 +2822,16 @@ mod tests {
 
         let mut ca = create_args(Some("Contested claim"));
         ca.id = Some("st-05".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let mut sa = start_args("st-05");
         sa.assignee = Some("agent-1".to_string());
-        cmd_start(sa, true, false).unwrap();
+        cmd_start(sa, true, false, false).unwrap();
 
         // Different assignee — should fail
         let mut sa2 = start_args("st-05");
         sa2.assignee = Some("agent-2".to_string());
-        let err = cmd_start(sa2, true, false).unwrap_err();
+        let err = cmd_start(sa2, true, false, false).unwrap_err();
         assert!(
             matches!(err, error::Error::AlreadyClaimed { .. }),
             "expected AlreadyClaimed, got: {:?}",
@@ -2827,15 +2850,15 @@ mod tests {
 
         let mut ca = create_args(Some("Claimed no assignee"));
         ca.id = Some("st-06".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let mut sa = start_args("st-06");
         sa.assignee = Some("agent-1".to_string());
-        cmd_start(sa, true, false).unwrap();
+        cmd_start(sa, true, false, false).unwrap();
 
         // No assignee — should fail (ticket is claimed)
         let sa2 = start_args("st-06");
-        let err = cmd_start(sa2, true, false).unwrap_err();
+        let err = cmd_start(sa2, true, false, false).unwrap_err();
         assert!(
             matches!(err, error::Error::AlreadyClaimed { .. }),
             "expected AlreadyClaimed, got: {:?}",
@@ -2853,13 +2876,13 @@ mod tests {
 
         let mut ca = create_args(Some("Unclaimed noop"));
         ca.id = Some("st-07".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         // Start without assignee
-        cmd_start(start_args("st-07"), true, false).unwrap();
+        cmd_start(start_args("st-07"), true, false, false).unwrap();
 
         // Start again without assignee — should be noop
-        let result = cmd_start(start_args("st-07"), true, false);
+        let result = cmd_start(start_args("st-07"), true, false, false);
         assert!(
             result.is_ok(),
             "unclaimed re-start should succeed: {:?}",
@@ -2877,11 +2900,11 @@ mod tests {
 
         let mut ca = create_args(Some("Open claim"));
         ca.id = Some("st-08".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let mut sa = start_args("st-08");
         sa.assignee = Some("agent-1".to_string());
-        cmd_start(sa, true, false).unwrap();
+        cmd_start(sa, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("st-08").unwrap();
@@ -2899,11 +2922,11 @@ mod tests {
 
         let mut ca = create_args(Some("Dry start"));
         ca.id = Some("st-09".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let mut sa = start_args("st-09");
         sa.assignee = Some("agent-1".to_string());
-        cmd_start(sa, true, true).unwrap(); // dry_run=true
+        cmd_start(sa, true, true, false).unwrap(); // dry_run=true
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("st-09").unwrap();
@@ -2928,7 +2951,7 @@ mod tests {
 
         let mut ca = create_args(Some("Version show test"));
         ca.id = Some("vs-01".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("vs-01").unwrap();
@@ -2959,7 +2982,7 @@ mod tests {
 
         let mut ca = create_args(Some("Stale integration"));
         ca.id = Some("stl-01".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         // Simulate two agents: both read the same ticket
         let st = store::Store::open().unwrap();
@@ -3019,7 +3042,7 @@ notes: []
         // Update via command
         let mut ua = update_args("leg-01");
         ua.title = Some("Updated legacy".to_string());
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let updated = st.read_ticket("leg-01").unwrap();
         assert!(
@@ -3038,9 +3061,9 @@ notes: []
 
         let mut ca = create_args(Some("Close test"));
         ca.id = Some("cl-01".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
-        cmd_close(close_args(vec!["cl-01"]), true, false).unwrap();
+        cmd_close(close_args(vec!["cl-01"]), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("cl-01").unwrap();
@@ -3057,11 +3080,11 @@ notes: []
 
         let mut ca = create_args(Some("Close reason test"));
         ca.id = Some("cl-02".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut args = close_args(vec!["cl-02"]);
         args.reason = Some("Done".to_string());
-        cmd_close(args, true, false).unwrap();
+        cmd_close(args, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("cl-02").unwrap();
@@ -3081,15 +3104,15 @@ notes: []
 
         let mut ca = create_args(Some("Close noop"));
         ca.id = Some("cl-03".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut args1 = close_args(vec!["cl-03"]);
         args1.reason = Some("First close".to_string());
-        cmd_close(args1, true, false).unwrap();
+        cmd_close(args1, true, false, false).unwrap();
 
         let mut args2 = close_args(vec!["cl-03"]);
         args2.reason = Some("Second close".to_string());
-        let result = cmd_close(args2, true, false);
+        let result = cmd_close(args2, true, false, false);
         assert!(result.is_ok(), "second close should succeed: {:?}", result);
 
         let st = store::Store::open().unwrap();
@@ -3108,13 +3131,13 @@ notes: []
 
         let mut ca1 = create_args(Some("Close multi A"));
         ca1.id = Some("cl-04".to_string());
-        cmd_create(ca1, false, false).unwrap();
+        cmd_create(ca1, false, false, false).unwrap();
 
         let mut ca2 = create_args(Some("Close multi B"));
         ca2.id = Some("cl-05".to_string());
-        cmd_create(ca2, false, false).unwrap();
+        cmd_create(ca2, false, false, false).unwrap();
 
-        cmd_close(close_args(vec!["cl-04", "cl-05"]), true, false).unwrap();
+        cmd_close(close_args(vec!["cl-04", "cl-05"]), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let t1 = st.read_ticket("cl-04").unwrap();
@@ -3133,10 +3156,10 @@ notes: []
 
         let mut ca = create_args(Some("Reopen test"));
         ca.id = Some("ro-01".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
-        cmd_close(close_args(vec!["ro-01"]), true, false).unwrap();
-        cmd_reopen(id_args("ro-01"), true, false).unwrap();
+        cmd_close(close_args(vec!["ro-01"]), true, false, false).unwrap();
+        cmd_reopen(id_args("ro-01"), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("ro-01").unwrap();
@@ -3153,9 +3176,9 @@ notes: []
 
         let mut ca = create_args(Some("Reopen noop"));
         ca.id = Some("ro-02".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
-        let result = cmd_reopen(id_args("ro-02"), true, false);
+        let result = cmd_reopen(id_args("ro-02"), true, false, false);
         assert!(
             result.is_ok(),
             "reopen of open ticket should succeed: {:?}",
@@ -3177,10 +3200,10 @@ notes: []
 
         let mut ca = create_args(Some("Reopen from in_progress"));
         ca.id = Some("ro-03".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
-        cmd_start(start_args("ro-03"), true, false).unwrap();
-        cmd_reopen(id_args("ro-03"), true, false).unwrap();
+        cmd_start(start_args("ro-03"), true, false, false).unwrap();
+        cmd_reopen(id_args("ro-03"), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("ro-03").unwrap();
@@ -3220,17 +3243,17 @@ notes: []
         let mut a = create_args(Some("High prio"));
         a.id = Some("lst-a".to_string());
         a.priority = Some(3);
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Low prio"));
         b.id = Some("lst-b".to_string());
         b.priority = Some(0);
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
         let mut c = create_args(Some("Mid prio"));
         c.id = Some("lst-c".to_string());
         c.priority = Some(1);
-        cmd_create(c, false, false).unwrap();
+        cmd_create(c, false, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let mut tickets = st.read_all().unwrap();
@@ -3254,12 +3277,12 @@ notes: []
 
         let mut a = create_args(Some("Open ticket"));
         a.id = Some("lstst-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("To close"));
         b.id = Some("lstst-b".to_string());
-        cmd_create(b, false, false).unwrap();
-        cmd_close(close_args(vec!["lstst-b"]), true, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
+        cmd_close(close_args(vec!["lstst-b"]), true, false, false).unwrap();
 
         let mut args = filter_args_default();
         args.status = Some(ticket::Status::Open);
@@ -3288,12 +3311,12 @@ notes: []
         let mut a = create_args(Some("Backend ticket"));
         a.id = Some("lsttg-a".to_string());
         a.tags = Some("backend".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Frontend ticket"));
         b.id = Some("lsttg-b".to_string());
         b.tags = Some("frontend".to_string());
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let mut tickets = st.read_all().unwrap();
@@ -3317,17 +3340,17 @@ notes: []
         let mut a = create_args(Some("P0"));
         a.id = Some("lstpr-a".to_string());
         a.priority = Some(0);
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("P1"));
         b.id = Some("lstpr-b".to_string());
         b.priority = Some(1);
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
         let mut c = create_args(Some("P3"));
         c.id = Some("lstpr-c".to_string());
         c.priority = Some(3);
-        cmd_create(c, false, false).unwrap();
+        cmd_create(c, false, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let mut tickets = st.read_all().unwrap();
@@ -3351,12 +3374,12 @@ notes: []
         let mut a = create_args(Some("A"));
         a.id = Some("lstlm-a".to_string());
         a.priority = Some(0);
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("B"));
         b.id = Some("lstlm-b".to_string());
         b.priority = Some(1);
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let mut tickets = st.read_all().unwrap();
@@ -3378,7 +3401,7 @@ notes: []
 
         let mut a = create_args(Some("Pluck test"));
         a.id = Some("lstpl-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut fa = filter_args_default();
         fa.pluck = Some("id".to_string());
@@ -3401,7 +3424,7 @@ notes: []
 
         let mut a = create_args(Some("Count me"));
         a.id = Some("lstcnt-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut fa = filter_args_default();
         fa.count = true;
@@ -3424,17 +3447,17 @@ notes: []
 
         let mut a = create_args(Some("First"));
         a.id = Some("clsd-a".to_string());
-        cmd_create(a, false, false).unwrap();
+        cmd_create(a, false, false, false).unwrap();
 
         let mut b = create_args(Some("Second"));
         b.id = Some("clsd-b".to_string());
-        cmd_create(b, false, false).unwrap();
+        cmd_create(b, false, false, false).unwrap();
 
         // Close a first, then b — b should appear first (newer mtime)
-        cmd_close(close_args(vec!["clsd-a"]), true, false).unwrap();
+        cmd_close(close_args(vec!["clsd-a"]), true, false, false).unwrap();
         // Sleep briefly to ensure different mtime
         std::thread::sleep(std::time::Duration::from_millis(10));
-        cmd_close(close_args(vec!["clsd-b"]), true, false).unwrap();
+        cmd_close(close_args(vec!["clsd-b"]), true, false, false).unwrap();
 
         let result = cmd_closed(closed_args_default(), false);
         assert!(result.is_ok(), "closed failed: {:?}", result);
@@ -3463,10 +3486,10 @@ notes: []
         for i in 0..25u32 {
             let mut a = create_args(Some(&format!("Ticket {}", i)));
             a.id = Some(format!("clsdlm-{:02}", i));
-            cmd_create(a, false, false).unwrap();
+            cmd_create(a, false, false, false).unwrap();
         }
         for i in 0..25u32 {
-            cmd_close(close_args(vec![&format!("clsdlm-{:02}", i)]), true, false).unwrap();
+            cmd_close(close_args(vec![&format!("clsdlm-{:02}", i)]), true, false, false).unwrap();
         }
 
         let result = cmd_closed(closed_args_default(), false);
@@ -3500,12 +3523,12 @@ notes: []
 
         let mut a = create_args(Some("A"));
         a.id = Some("ready-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut b = create_args(Some("B"));
         b.id = Some("ready-b".to_string());
         b.dep = vec!["ready-a".to_string()];
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         // Only A should be ready (B depends on A which is open)
         let mut buf = Vec::new();
@@ -3528,12 +3551,12 @@ notes: []
 
         let mut a = create_args(Some("A"));
         a.id = Some("rca-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut b = create_args(Some("B"));
         b.id = Some("rca-b".to_string());
         b.dep = vec!["rca-a".to_string()];
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         // Close A
         cmd_close(
@@ -3542,6 +3565,7 @@ notes: []
                 reason: None,
             },
             true,
+            false,
             false,
         )
         .unwrap();
@@ -3573,7 +3597,7 @@ notes: []
 
         let mut a = create_args(Some("Count A"));
         a.id = Some("rc-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut args = filter_args_default();
         args.count = true;
@@ -3595,11 +3619,11 @@ notes: []
         let mut a = create_args(Some("Tagged"));
         a.id = Some("rt-a".to_string());
         a.tags = Some("backend".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut b = create_args(Some("Untagged"));
         b.id = Some("rt-b".to_string());
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         let mut args = filter_args_default();
         args.tag = vec!["backend".to_string()];
@@ -3624,12 +3648,12 @@ notes: []
 
         let mut a = create_args(Some("Dep A"));
         a.id = Some("blk-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut b = create_args(Some("Blocked B"));
         b.id = Some("blk-b".to_string());
         b.dep = vec!["blk-a".to_string()];
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         let mut buf = Vec::new();
         cmd_blocked_to_writer(filter_args_default(), &mut buf).unwrap();
@@ -3653,19 +3677,19 @@ notes: []
 
         let mut a = create_args(Some("Dep"));
         a.id = Some("bpf-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut b = create_args(Some("High priority blocked"));
         b.id = Some("bpf-b".to_string());
         b.priority = Some(1);
         b.dep = vec!["bpf-a".to_string()];
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         let mut c = create_args(Some("Low priority blocked"));
         c.id = Some("bpf-c".to_string());
         c.priority = Some(3);
         c.dep = vec!["bpf-a".to_string()];
-        cmd_create(c, true, false).unwrap();
+        cmd_create(c, true, false, false).unwrap();
 
         let mut args = filter_args_default();
         args.priority = Some("0-2".to_string());
@@ -3690,7 +3714,7 @@ notes: []
 
         let mut a = create_args(Some("No deps"));
         a.id = Some("ir-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let (ready, open_deps) = is_ready_state("ir-a", true).unwrap();
         assert!(ready, "ticket with no deps should be ready");
@@ -3707,12 +3731,12 @@ notes: []
 
         let mut a = create_args(Some("Dep A"));
         a.id = Some("irb-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut b = create_args(Some("Blocked B"));
         b.id = Some("irb-b".to_string());
         b.dep = vec!["irb-a".to_string()];
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         let (ready, open_deps) = is_ready_state("irb-b", true).unwrap();
         assert!(!ready, "B should not be ready while A is open");
@@ -3729,12 +3753,12 @@ notes: []
 
         let mut a = create_args(Some("Dep A"));
         a.id = Some("irc-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut b = create_args(Some("Blocked B"));
         b.id = Some("irc-b".to_string());
         b.dep = vec!["irc-a".to_string()];
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         // Close A
         cmd_close(
@@ -3743,6 +3767,7 @@ notes: []
                 reason: None,
             },
             true,
+            false,
             false,
         )
         .unwrap();
@@ -3762,7 +3787,7 @@ notes: []
 
         let mut a = create_args(Some("Closed ticket"));
         a.id = Some("ird-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         cmd_close(
             cli::CloseArgs {
@@ -3770,6 +3795,7 @@ notes: []
                 reason: None,
             },
             true,
+            false,
             false,
         )
         .unwrap();
@@ -3789,7 +3815,7 @@ notes: []
 
         let mut a = create_args(Some("Ready ticket"));
         a.id = Some("ire-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let result = cmd_is_ready(
             cli::IdArgs {
@@ -3829,17 +3855,17 @@ notes: []
         // Create A → B → C (no cycle)
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("dc-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("dc-b".to_string());
         b.dep = vec!["dc-a".to_string()];
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         let mut c = create_args(Some("Ticket C"));
         c.id = Some("dc-c".to_string());
         c.dep = vec!["dc-b".to_string()];
-        cmd_create(c, true, false).unwrap();
+        cmd_create(c, true, false, false).unwrap();
 
         let result = cmd_dep_cycle();
         assert!(
@@ -3860,11 +3886,11 @@ notes: []
         // Create A and B without deps first
         let mut a = create_args(Some("Ticket A"));
         a.id = Some("dcc-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut b = create_args(Some("Ticket B"));
         b.id = Some("dcc-b".to_string());
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         // Manually introduce A→B and B→A to bypass would_create_cycle
         let st = store::Store::open().unwrap();
@@ -3909,11 +3935,11 @@ notes: []
         args.id = Some("pt-a1".to_string());
         args.ticket_type = Some(ticket::TicketType::Bug);
         args.priority = Some(1);
-        cmd_create(args, true, false).unwrap();
+        cmd_create(args, true, false, false).unwrap();
 
         let mut args2 = create_args(Some("Add rate limiter"));
         args2.id = Some("pt-b2".to_string());
-        cmd_create(args2, true, false).unwrap();
+        cmd_create(args2, true, false, false).unwrap();
 
         // Verify pretty mode doesn't error
         let result = cmd_list(filter_args_default(), true);
@@ -3957,7 +3983,7 @@ notes: []
         args.estimate = Some(30);
         args.tags = Some("backend,auth".to_string());
         args.description = Some("The auth middleware stores session tokens...".to_string());
-        cmd_create(args, true, false).unwrap();
+        cmd_create(args, true, false, false).unwrap();
 
         // Verify pretty mode doesn't error
         let sa = cli::ShowArgs {
@@ -3993,7 +4019,7 @@ notes: []
 
         let mut args = create_args(Some("JSON output ticket"));
         args.id = Some("pt-json1".to_string());
-        cmd_create(args, true, false).unwrap();
+        cmd_create(args, true, false, false).unwrap();
 
         // Pre-arm colors: any accidental colorize_* call in the JSON output path
         // would emit ANSI escape codes and cause the assertion below to fail.
@@ -4025,17 +4051,17 @@ notes: []
 
         let mut a = create_args(Some("Fix auth middleware"));
         a.id = Some("pt-tree-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut b = create_args(Some("Add rate limiter"));
         b.id = Some("pt-tree-b".to_string());
         b.dep = vec!["pt-tree-a".to_string()];
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         let mut c = create_args(Some("Update docs"));
         c.id = Some("pt-tree-c".to_string());
         c.dep = vec!["pt-tree-b".to_string()];
-        cmd_create(c, true, false).unwrap();
+        cmd_create(c, true, false, false).unwrap();
 
         let result = cmd_dep_tree(
             cli::TreeArgs {
@@ -4059,7 +4085,7 @@ notes: []
 
         let mut a = create_args(Some("Ready ticket"));
         a.id = Some("pt-ready-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let result = cmd_ready(filter_args_default(), true);
         assert!(result.is_ok(), "pretty ready failed: {:?}", result);
@@ -4075,12 +4101,12 @@ notes: []
 
         let mut a = create_args(Some("Dep A"));
         a.id = Some("pt-blk-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut b = create_args(Some("Blocked B"));
         b.id = Some("pt-blk-b".to_string());
         b.dep = vec!["pt-blk-a".to_string()];
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
 
         let result = cmd_blocked(filter_args_default(), true);
         assert!(result.is_ok(), "pretty blocked failed: {:?}", result);
@@ -4096,13 +4122,14 @@ notes: []
 
         let mut a = create_args(Some("Closed ticket"));
         a.id = Some("pt-cls-a".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
         cmd_close(
             cli::CloseArgs {
                 ids: vec!["pt-cls-a".to_string()],
                 reason: None,
             },
             true,
+            false,
             false,
         )
         .unwrap();
@@ -4315,11 +4342,11 @@ notes: []
 
         let mut ca = create_args(Some("Design test"));
         ca.id = Some("upd-dsg".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("upd-dsg");
         ua.design = Some("Some design notes".to_string());
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("upd-dsg").unwrap();
@@ -4327,7 +4354,7 @@ notes: []
 
         let mut ua2 = update_args("upd-dsg");
         ua2.design = Some("".to_string());
-        cmd_update(ua2, true, false).unwrap();
+        cmd_update(ua2, true, false, false).unwrap();
 
         let ticket2 = st.read_ticket("upd-dsg").unwrap();
         assert_eq!(ticket2.design, None);
@@ -4343,11 +4370,11 @@ notes: []
 
         let mut ca = create_args(Some("Acceptance test"));
         ca.id = Some("upd-acc".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("upd-acc");
         ua.acceptance = Some("Passes all tests".to_string());
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("upd-acc").unwrap();
@@ -4355,7 +4382,7 @@ notes: []
 
         let mut ua2 = update_args("upd-acc");
         ua2.acceptance = Some("".to_string());
-        cmd_update(ua2, true, false).unwrap();
+        cmd_update(ua2, true, false, false).unwrap();
 
         let ticket2 = st.read_ticket("upd-acc").unwrap();
         assert_eq!(ticket2.acceptance, None);
@@ -4371,11 +4398,11 @@ notes: []
 
         let mut ca = create_args(Some("Estimate test"));
         ca.id = Some("upd-est".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let mut ua = update_args("upd-est");
         ua.estimate = Some(120);
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("upd-est").unwrap();
@@ -4392,7 +4419,7 @@ notes: []
 
         let mut ca = create_args(Some("Type test"));
         ca.id = Some("upd-typ".to_string());
-        cmd_create(ca, false, false).unwrap();
+        cmd_create(ca, false, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("upd-typ").unwrap();
@@ -4400,7 +4427,7 @@ notes: []
 
         let mut ua = update_args("upd-typ");
         ua.ticket_type = Some(ticket::TicketType::Bug);
-        cmd_update(ua, true, false).unwrap();
+        cmd_update(ua, true, false, false).unwrap();
 
         let ticket2 = st.read_ticket("upd-typ").unwrap();
         assert_eq!(ticket2.ticket_type, ticket::TicketType::Bug);
@@ -4415,7 +4442,7 @@ notes: []
         setup_vima(&tmp);
 
         let ua = update_args("no-such-id");
-        let result = cmd_update(ua, true, false);
+        let result = cmd_update(ua, true, false, false);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), "not_found");
 
@@ -4432,12 +4459,12 @@ notes: []
 
         let mut parent = create_args(Some("Parent ticket"));
         parent.id = Some("cr-par".to_string());
-        cmd_create(parent, true, false).unwrap();
+        cmd_create(parent, true, false, false).unwrap();
 
         let mut child = create_args(Some("Child ticket"));
         child.id = Some("cr-chi".to_string());
         child.parent = Some("cr-par".to_string());
-        cmd_create(child, true, false).unwrap();
+        cmd_create(child, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("cr-chi").unwrap();
@@ -4456,7 +4483,7 @@ notes: []
         ca.id = Some("cr-full".to_string());
         ca.design = Some("Design notes here".to_string());
         ca.acceptance = Some("All tests pass".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("cr-full").unwrap();
@@ -4475,7 +4502,7 @@ notes: []
         let mut ca = create_args(Some("Estimated ticket"));
         ca.id = Some("cr-est".to_string());
         ca.estimate = Some(60);
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("cr-est").unwrap();
@@ -4493,7 +4520,7 @@ notes: []
         let mut ca = create_args(Some("Feature ticket"));
         ca.id = Some("cr-feat".to_string());
         ca.ticket_type = Some(ticket::TicketType::Feature);
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("cr-feat").unwrap();
@@ -4511,7 +4538,7 @@ notes: []
         let mut ca = create_args(Some("Assigned ticket"));
         ca.id = Some("cr-asgn".to_string());
         ca.assignee = Some("alice".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("cr-asgn").unwrap();
@@ -4530,7 +4557,7 @@ notes: []
 
         let mut ca = create_args(Some("Open ticket"));
         ca.id = Some("cls-open".to_string());
-        cmd_create(ca, true, false).unwrap();
+        cmd_create(ca, true, false, false).unwrap();
 
         let result = closed_collect(&closed_args_default()).unwrap();
         assert!(result.is_empty());
@@ -4547,7 +4574,7 @@ notes: []
         let mut a = create_args(Some("Tagged closed"));
         a.id = Some("cls-tg-a".to_string());
         a.tags = Some("urgent".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
         cmd_close(
             cli::CloseArgs {
                 ids: vec!["cls-tg-a".to_string()],
@@ -4555,18 +4582,20 @@ notes: []
             },
             true,
             false,
+            false,
         )
         .unwrap();
 
         let mut b = create_args(Some("Untagged closed"));
         b.id = Some("cls-tg-b".to_string());
-        cmd_create(b, true, false).unwrap();
+        cmd_create(b, true, false, false).unwrap();
         cmd_close(
             cli::CloseArgs {
                 ids: vec!["cls-tg-b".to_string()],
                 reason: None,
             },
             true,
+            false,
             false,
         )
         .unwrap();
@@ -4590,16 +4619,16 @@ notes: []
 
         let mut dep1 = create_args(Some("Dep 1"));
         dep1.id = Some("blk-d1".to_string());
-        cmd_create(dep1, true, false).unwrap();
+        cmd_create(dep1, true, false, false).unwrap();
 
         let mut dep2 = create_args(Some("Dep 2"));
         dep2.id = Some("blk-d2".to_string());
-        cmd_create(dep2, true, false).unwrap();
+        cmd_create(dep2, true, false, false).unwrap();
 
         let mut blocked = create_args(Some("Blocked ticket"));
         blocked.id = Some("blk-main".to_string());
         blocked.dep = vec!["blk-d1".to_string(), "blk-d2".to_string()];
-        cmd_create(blocked, true, false).unwrap();
+        cmd_create(blocked, true, false, false).unwrap();
 
         // Close one dep — ticket should still be blocked
         cmd_close(
@@ -4608,6 +4637,7 @@ notes: []
                 reason: None,
             },
             true,
+            false,
             false,
         )
         .unwrap();
@@ -4627,6 +4657,7 @@ notes: []
                 reason: None,
             },
             true,
+            false,
             false,
         )
         .unwrap();
@@ -4649,7 +4680,7 @@ notes: []
 
         let mut a = create_args(Some("No deps"));
         a.id = Some("blk-none".to_string());
-        cmd_create(a, true, false).unwrap();
+        cmd_create(a, true, false, false).unwrap();
 
         let mut buf = Vec::new();
         cmd_blocked_to_writer(filter_args_default(), &mut buf).unwrap();

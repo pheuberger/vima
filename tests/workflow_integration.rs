@@ -375,3 +375,71 @@ fn undep_removes_dependency() {
     let json = run_ok(vima_cmd(&tmp).args(["show", &a]));
     assert!(json["deps"].as_array().unwrap().is_empty());
 }
+
+// ── JSON mode emits no stderr (agent-friendly) ─────────────────────────
+
+#[test]
+fn json_mode_create_emits_no_stderr() {
+    let tmp = setup_store();
+    let output = vima_cmd(&tmp)
+        .args(["create", "No stderr please", "--type", "task"])
+        .output()
+        .expect("failed to run vima create");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.is_empty(),
+        "JSON mode should not emit to stderr, got: {stderr}"
+    );
+    // stdout must still be valid JSON with the ticket id
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout not valid JSON");
+    assert!(json["id"].as_str().is_some());
+}
+
+#[test]
+fn pretty_mode_create_emits_stderr_confirmation() {
+    let tmp = setup_store();
+    let output = vima_cmd(&tmp)
+        .args(["--pretty", "create", "With stderr", "--type", "task"])
+        .output()
+        .expect("failed to run vima create");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Created "),
+        "pretty mode should emit 'Created' to stderr, got: {stderr}"
+    );
+}
+
+#[test]
+fn json_mode_update_emits_no_stderr() {
+    let tmp = setup_store();
+    let id = create_ticket(&tmp, "Update me");
+    let output = vima_cmd(&tmp)
+        .args(["update", &id, "--priority", "3"])
+        .output()
+        .expect("failed to run vima update");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.is_empty(),
+        "JSON mode update should not emit to stderr, got: {stderr}"
+    );
+}
+
+#[test]
+fn json_mode_close_emits_no_stderr() {
+    let tmp = setup_store();
+    let id = create_ticket(&tmp, "Close me");
+    let output = vima_cmd(&tmp)
+        .args(["close", &id])
+        .output()
+        .expect("failed to run vima close");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.is_empty(),
+        "JSON mode close should not emit to stderr, got: {stderr}"
+    );
+}
