@@ -186,8 +186,9 @@ pub struct UpdateArgs {
 
 #[derive(Args, Debug)]
 pub struct ShowArgs {
-    /// Ticket ID
-    pub id: String,
+    /// Ticket IDs (one or more). Single ID returns one JSON object; multiple return a JSON array.
+    #[arg(required = true, num_args = 1..)]
+    pub ids: Vec<String>,
 
     /// Pluck a specific field from JSON output
     #[arg(long)]
@@ -576,7 +577,7 @@ mod tests {
     fn show_pluck_field() {
         let cli = parse(&["vima", "show", "vi-1234", "--pluck", "title"]).unwrap();
         if let Commands::Show(args) = cli.command {
-            assert_eq!(args.id, "vi-1234");
+            assert_eq!(args.ids, vec!["vi-1234"]);
             assert_eq!(args.pluck, Some("title".to_string()));
         } else {
             panic!("Expected Show command");

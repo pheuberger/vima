@@ -204,12 +204,23 @@ fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool, pretty: boo
 
 fn cmd_show(args: cli::ShowArgs, exact: bool, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
-    let resolved = st.resolve_id(&args.id, exact)?;
-    let ticket = st.load_and_compute(&resolved)?;
+    let tickets: Vec<ticket::Ticket> = args
+        .ids
+        .iter()
+        .map(|id| {
+            let resolved = st.resolve_id(id, exact)?;
+            st.load_and_compute(&resolved)
+        })
+        .collect::<Result<_>>()?;
+
     if pretty {
-        output::pretty_show(&ticket)?;
+        for t in &tickets {
+            output::pretty_show(t)?;
+        }
+    } else if tickets.len() == 1 {
+        output::output_one(&tickets[0], &args.pluck)?;
     } else {
-        output::output_one(&ticket, &args.pluck)?;
+        output::output_many_full(&tickets, &args.pluck, false, true)?;
     }
     Ok(())
 }
@@ -1310,9 +1321,19 @@ mod tests {
         w: &mut W,
     ) -> Result<()> {
         let st = store::Store::open()?;
-        let resolved = st.resolve_id(&args.id, exact)?;
-        let ticket = st.load_and_compute(&resolved)?;
-        output::output_one_to_writer(&ticket, &args.pluck, w)
+        let tickets: Vec<ticket::Ticket> = args
+            .ids
+            .iter()
+            .map(|id| {
+                let resolved = st.resolve_id(id, exact)?;
+                st.load_and_compute(&resolved)
+            })
+            .collect::<Result<_>>()?;
+        if tickets.len() == 1 {
+            output::output_one_to_writer(&tickets[0], &args.pluck, w)
+        } else {
+            output::output_many_full_to_writer(&tickets, &args.pluck, false, true, w)
+        }
     }
 
     /// Mirror of cmd_list that writes output to an arbitrary writer.
@@ -1771,7 +1792,7 @@ mod tests {
 
     fn show_args(id: &str) -> cli::ShowArgs {
         cli::ShowArgs {
-            id: id.to_string(),
+            ids: vec![id.to_string()],
             pluck: None,
         }
     }
@@ -1924,6 +1945,96 @@ mod tests {
         assert!(result.is_err(), "expected error for nonexistent id");
         let err = result.unwrap_err();
         assert_eq!(err.code(), "not_found");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn show_multiple_ids_returns_array() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("First"));
+        a.id = Some("multi-01".to_string());
+        cmd_create(a, true, false, false).unwrap();
+        let mut b = create_args(Some("Second"));
+        b.id = Some("multi-02".to_string());
+        cmd_create(b, true, false, false).unwrap();
+        let mut c = create_args(Some("Third"));
+        c.id = Some("multi-03".to_string());
+        cmd_create(c, true, false, false).unwrap();
+
+        let sa = cli::ShowArgs {
+            ids: vec![
+                "multi-01".to_string(),
+                "multi-02".to_string(),
+                "multi-03".to_string(),
+            ],
+            pluck: None,
+        };
+        let mut buf = Vec::new();
+        cmd_show_to_writer(sa, true, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array for multi-id");
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["id"], "multi-01");
+        assert_eq!(arr[1]["id"], "multi-02");
+        assert_eq!(arr[2]["id"], "multi-03");
+        // Heavy fields included for show (unlike list)
+        assert!(arr[0].get("title").is_some());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn show_multiple_ids_with_pluck() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("A"));
+        a.id = Some("mp-01".to_string());
+        cmd_create(a, true, false, false).unwrap();
+        let mut b = create_args(Some("B"));
+        b.id = Some("mp-02".to_string());
+        cmd_create(b, true, false, false).unwrap();
+
+        let sa = cli::ShowArgs {
+            ids: vec!["mp-01".to_string(), "mp-02".to_string()],
+            pluck: Some("id,title".to_string()),
+        };
+        let mut buf = Vec::new();
+        cmd_show_to_writer(sa, true, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["id"], "mp-01");
+        assert_eq!(arr[0]["title"], "A");
+        assert_eq!(arr[1]["id"], "mp-02");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn show_multiple_fails_if_any_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Exists"));
+        a.id = Some("mm-01".to_string());
+        cmd_create(a, true, false, false).unwrap();
+
+        let sa = cli::ShowArgs {
+            ids: vec!["mm-01".to_string(), "nonexistent".to_string()],
+            pluck: None,
+        };
+        let result = cmd_show(sa, false, false);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), "not_found");
 
         std::env::remove_var("VIMA_DIR");
     }
@@ -4012,7 +4123,7 @@ notes: []
 
         // Verify pretty mode doesn't error
         let sa = cli::ShowArgs {
-            id: "pt-show1".to_string(),
+            ids: vec!["pt-show1".to_string()],
             pluck: None,
         };
         let result = cmd_show(sa, true, true);
@@ -4051,7 +4162,7 @@ notes: []
         colored::control::set_override(true);
 
         let sa = cli::ShowArgs {
-            id: "pt-json1".to_string(),
+            ids: vec!["pt-json1".to_string()],
             pluck: None,
         };
         let mut buf: Vec<u8> = Vec::new();
