@@ -1233,6 +1233,16 @@ fn main() {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(e) => {
+            use clap::error::ErrorKind;
+            // --help / --version are not errors: clap returns them as Err
+            // but they should print to stdout and exit 0.
+            match e.kind() {
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+                    let _ = e.print();
+                    std::process::exit(0);
+                }
+                _ => {}
+            }
             // Convert clap errors to structured JSON on stderr
             let message = e.to_string();
             // Extract the subcommand name from args to suggest available flags

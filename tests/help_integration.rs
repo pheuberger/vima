@@ -75,6 +75,58 @@ fn help_unknown_command_json_exits_nonzero() {
 }
 
 #[test]
+fn dash_dash_help_top_level_exits_zero() {
+    let output = vima_bin()
+        .args(["--help"])
+        .output()
+        .expect("failed to run vima");
+
+    assert!(
+        output.status.success(),
+        "vima --help should exit 0, got {:?}",
+        output.status
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Usage:"),
+        "help text should print to stdout"
+    );
+}
+
+#[test]
+fn dash_dash_help_subcommand_exits_zero() {
+    let output = vima_bin()
+        .args(["update", "--help"])
+        .output()
+        .expect("failed to run vima");
+
+    assert!(
+        output.status.success(),
+        "vima update --help should exit 0, got {:?}",
+        output.status
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Update a ticket"),
+        "subcommand help should print to stdout"
+    );
+}
+
+#[test]
+fn dash_h_subcommand_exits_zero() {
+    let output = vima_bin()
+        .args(["list", "-h"])
+        .output()
+        .expect("failed to run vima");
+
+    assert!(
+        output.status.success(),
+        "vima list -h should exit 0, got {:?}",
+        output.status
+    );
+}
+
+#[test]
 fn unrecognized_flag_includes_available_flags() {
     let output = vima_bin()
         .args(["list", "--nonexistent-flag"])
