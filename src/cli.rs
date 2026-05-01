@@ -98,15 +98,15 @@ pub struct CreateArgs {
     pub tags: Option<String>,
 
     /// Description (accepts @PATH to read from a file, or `-` to read from stdin; `@@` escapes a literal `@`)
-    #[arg(long, alias = "body")]
+    #[arg(long, alias = "body", allow_hyphen_values = true)]
     pub description: Option<String>,
 
     /// Design notes (accepts @PATH or `-` for stdin)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub design: Option<String>,
 
     /// Acceptance criteria (accepts @PATH or `-` for stdin)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub acceptance: Option<String>,
 
     /// Dependencies (ticket IDs)
@@ -130,7 +130,7 @@ pub struct CreateArgs {
     pub batch: bool,
 
     /// Create from JSON object (all fields in one argument; accepts @PATH or `-` for stdin)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub json: Option<String>,
 }
 
@@ -144,15 +144,15 @@ pub struct UpdateArgs {
     pub title: Option<String>,
 
     /// New description (accepts @PATH to read from a file, or `-` to read from stdin; `@@` escapes a literal `@`)
-    #[arg(long, alias = "body")]
+    #[arg(long, alias = "body", allow_hyphen_values = true)]
     pub description: Option<String>,
 
     /// New design notes (accepts @PATH or `-` for stdin)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub design: Option<String>,
 
     /// New acceptance criteria (accepts @PATH or `-` for stdin)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub acceptance: Option<String>,
 
     /// New priority
@@ -180,7 +180,7 @@ pub struct UpdateArgs {
     pub ticket_type: Option<TicketType>,
 
     /// Update from JSON object (all fields in one argument; accepts @PATH or `-` for stdin)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub json: Option<String>,
 }
 
@@ -594,7 +594,29 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // 20. Tree with --full flag
+    // 20. Long-form fields accept `-` (and stray-whitespace variants) as values.
+    // Without `allow_hyphen_values` clap may reject `- ` from a shell-substituted
+    // value as an unknown positional ("unexpected argument '- ' found").
+    #[test]
+    fn long_form_fields_accept_dash_and_whitespace() {
+        for v in ["-", "- ", " -"] {
+            let cli = parse(&["vima", "create", "Title", "--description", v]).unwrap();
+            if let Commands::Create(args) = cli.command {
+                assert_eq!(args.description.as_deref(), Some(v));
+            } else {
+                panic!("Expected Create command");
+            }
+
+            let cli = parse(&["vima", "update", "vi-0001", "--design", v]).unwrap();
+            if let Commands::Update(args) = cli.command {
+                assert_eq!(args.design.as_deref(), Some(v));
+            } else {
+                panic!("Expected Update command");
+            }
+        }
+    }
+
+    // 21. Tree with --full flag
     #[test]
     fn dep_tree_full_flag() {
         let cli = parse(&["vima", "dep", "tree", "vi-0001", "--full"]).unwrap();

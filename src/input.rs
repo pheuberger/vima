@@ -22,7 +22,12 @@ impl InputResolver {
     /// - `"@path"`       → file contents at `path`
     /// - anything else   → returned unchanged
     pub fn resolve(&mut self, value: String) -> Result<String> {
-        if value == "-" {
+        // Match sentinels on the trimmed view so stray whitespace from shell
+        // substitutions / heredoc continuations (e.g. `"- "`, `" -"`) still
+        // resolve as stdin/file. Plain values pass through untouched so a
+        // legitimate description like `"  hello  "` keeps its whitespace.
+        let trimmed = value.trim();
+        if trimmed == "-" {
             if self.stdin_consumed {
                 return Err(Error::InvalidArgument(
                     "only one flag may read from stdin (-) per invocation".into(),
@@ -33,10 +38,10 @@ impl InputResolver {
             std::io::stdin().read_to_string(&mut buf)?;
             return Ok(buf);
         }
-        if let Some(rest) = value.strip_prefix("@@") {
+        if let Some(rest) = trimmed.strip_prefix("@@") {
             return Ok(format!("@{rest}"));
         }
-        if let Some(path) = value.strip_prefix('@') {
+        if let Some(path) = trimmed.strip_prefix('@') {
             return std::fs::read_to_string(path).map_err(|e| match e.kind() {
                 std::io::ErrorKind::NotFound => Error::FileNotFound(path.to_string()),
                 _ => Error::Io(e),
@@ -123,6 +128,42 @@ mod tests {
         let err = r.resolve("-".into()).unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)));
         assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn whitespace_around_dash_still_triggers_stdin_sentinel() {
+        // Stray whitespace from heredocs / $(...) substitutions should not
+        // turn `-` into a literal value.
+        let mut r = InputResolver {
+            stdin_consumed: true,
+        };
+        for v in ["- ", " -", "  -  ", "\t-\n"] {
+            let err = r.resolve(v.into()).unwrap_err();
+            assert!(
+                matches!(err, Error::InvalidArgument(_)),
+                "expected stdin sentinel match for {v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn whitespace_around_at_path_still_reads_file() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "hello").unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let mut r = InputResolver::new();
+        let out = r.resolve(format!("  @{path}\n")).unwrap();
+        assert_eq!(out, "hello");
+    }
+
+    #[test]
+    fn plain_value_whitespace_is_preserved() {
+        // Only sentinel matching is whitespace-tolerant; plain values must
+        // pass through byte-for-byte.
+        let mut r = InputResolver::new();
+        assert_eq!(r.resolve("  hello  ".into()).unwrap(), "  hello  ");
+        assert_eq!(r.resolve("\nbody\n".into()).unwrap(), "\nbody\n");
     }
 
     #[test]
