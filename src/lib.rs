@@ -4,6 +4,7 @@ pub mod deps;
 pub mod error;
 pub mod filter;
 pub mod id;
+pub mod input;
 pub mod output;
 pub mod plugin;
 pub mod store;

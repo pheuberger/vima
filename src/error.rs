@@ -19,6 +19,8 @@ pub enum Error {
         current_assignee: String,
     },
     InvalidField(String),
+    InvalidArgument(String),
+    FileNotFound(String),
     NoVimaDir,
     Io(std::io::Error),
     Yaml(String),
@@ -39,6 +41,8 @@ impl Error {
             Error::Stale { .. } => "stale",
             Error::AlreadyClaimed { .. } => "already_claimed",
             Error::InvalidField(_) => "invalid_field",
+            Error::InvalidArgument(_) => "invalid_argument",
+            Error::FileNotFound(_) => "not_found",
             Error::NoVimaDir => "no_vima_dir",
             Error::Io(_) => "io_error",
             Error::Yaml(_) => "yaml_error",
@@ -66,6 +70,10 @@ impl Error {
             Error::InvalidField(_) => {
                 "run `vima help <command> --json` to see valid fields and values"
             }
+            Error::InvalidArgument(_) => {
+                "run `vima help <command> --json` to see valid arguments and conventions"
+            }
+            Error::FileNotFound(_) => "check that the path exists and is readable",
             Error::NoVimaDir => "run `vima init` to create a .vima/ store in this directory",
             Error::Io(_) => "check file permissions and disk space",
             Error::Yaml(_) => "check input for valid YAML/JSON syntax",
@@ -77,12 +85,14 @@ impl Error {
         match self {
             Error::Cycle(_) => 2,
             Error::NotFound(_) => 3,
+            Error::FileNotFound(_) => 3,
             Error::AmbiguousId(_, _) => 3,
             Error::IdExists(_) => 4,
             Error::Stale { .. } => 5,
             Error::AlreadyClaimed { .. } => 6,
             Error::InvalidBackref(_) => 1,
             Error::InvalidField(_) => 1,
+            Error::InvalidArgument(_) => 1,
             Error::NoVimaDir => 1,
             Error::Io(_) => 1,
             Error::Yaml(_) => 1,
@@ -114,6 +124,8 @@ impl fmt::Display for Error {
                 current_assignee,
             } => write!(f, "ticket {id} is already claimed by {current_assignee}"),
             Error::InvalidField(msg) => write!(f, "invalid field: {msg}"),
+            Error::InvalidArgument(msg) => write!(f, "invalid argument: {msg}"),
+            Error::FileNotFound(path) => write!(f, "file not found: {path}"),
             Error::NoVimaDir => write!(f, "no .vima/ directory found"),
             Error::Io(e) => write!(f, "io error: {e}"),
             Error::Yaml(msg) => write!(f, "yaml parse error: {msg}"),
@@ -136,6 +148,8 @@ impl std::error::Error for Error {
             Error::Stale { .. } => None,
             Error::AlreadyClaimed { .. } => None,
             Error::InvalidField(_) => None,
+            Error::InvalidArgument(_) => None,
+            Error::FileNotFound(_) => None,
             Error::NoVimaDir => None,
             Error::Yaml(_) => None,
             Error::PluginExec { .. } => None,
@@ -188,6 +202,8 @@ pub fn error_json(err: &Error) -> serde_json::Value {
         Error::InvalidBackref(_) => {}
         Error::IdExists(_) => {}
         Error::InvalidField(_) => {}
+        Error::InvalidArgument(_) => {}
+        Error::FileNotFound(_) => {}
         Error::NoVimaDir => {}
         Error::Io(_) => {}
         Error::Yaml(_) => {}
@@ -258,11 +274,13 @@ mod tests {
             "already_claimed"
         );
         assert_eq!(Error::InvalidField("bad".into()).code(), "invalid_field");
-        assert_eq!(Error::NoVimaDir.code(), "no_vima_dir");
         assert_eq!(
-            Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "x")).code(),
-            "io_error"
+            Error::InvalidArgument("bad".into()).code(),
+            "invalid_argument"
         );
+        assert_eq!(Error::FileNotFound("p".into()).code(), "not_found");
+        assert_eq!(Error::NoVimaDir.code(), "no_vima_dir");
+        assert_eq!(Error::Io(std::io::Error::other("x")).code(), "io_error");
         assert_eq!(Error::Yaml("msg".into()).code(), "yaml_error");
         assert_eq!(
             Error::PluginExec {
@@ -298,11 +316,10 @@ mod tests {
             6
         );
         assert_eq!(Error::InvalidField("bad".into()).exit_code(), 1);
+        assert_eq!(Error::InvalidArgument("bad".into()).exit_code(), 1);
+        assert_eq!(Error::FileNotFound("p".into()).exit_code(), 3);
         assert_eq!(Error::NoVimaDir.exit_code(), 1);
-        assert_eq!(
-            Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "x")).exit_code(),
-            1
-        );
+        assert_eq!(Error::Io(std::io::Error::other("x")).exit_code(), 1);
         assert_eq!(Error::Yaml("msg".into()).exit_code(), 1);
         assert_eq!(
             Error::PluginExec {
@@ -357,8 +374,10 @@ mod tests {
                 current_assignee: "agent-1".into(),
             },
             Error::InvalidField("bad".into()),
+            Error::InvalidArgument("bad".into()),
+            Error::FileNotFound("p".into()),
             Error::NoVimaDir,
-            Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "x")),
+            Error::Io(std::io::Error::other("x")),
             Error::Yaml("msg".into()),
             Error::PluginExec {
                 plugin: "vima-foo".into(),

@@ -4,6 +4,7 @@ mod deps;
 mod error;
 mod filter;
 mod id;
+mod input;
 mod output;
 mod plugin;
 mod store;
@@ -25,6 +26,15 @@ fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool, pretty: boo
     // Merge --title flag into positional title (flag takes precedence)
     if args.title.is_none() {
         args.title = args.title_flag.take();
+    }
+    // Resolve @PATH / - sentinels before any field is consumed. Batch mode
+    // reads its own JSON from stdin, so skip resolution there.
+    if !args.batch {
+        let mut resolver = input::InputResolver::new();
+        args.json = resolver.resolve_opt(args.json)?;
+        args.description = resolver.resolve_opt(args.description)?;
+        args.design = resolver.resolve_opt(args.design)?;
+        args.acceptance = resolver.resolve_opt(args.acceptance)?;
     }
     if let Some(ref json_str) = args.json {
         let obj: serde_json::Value = serde_json::from_str(json_str)
@@ -397,6 +407,11 @@ fn cmd_undep(args: cli::UndepArgs, exact: bool, pretty: bool) -> Result<()> {
 }
 
 fn cmd_update(mut args: cli::UpdateArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+    let mut resolver = input::InputResolver::new();
+    args.json = resolver.resolve_opt(args.json)?;
+    args.description = resolver.resolve_opt(args.description)?;
+    args.design = resolver.resolve_opt(args.design)?;
+    args.acceptance = resolver.resolve_opt(args.acceptance)?;
     if let Some(ref json_str) = args.json {
         let obj: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| Error::Yaml(format!("invalid --json: {e}")))?;
@@ -906,6 +921,16 @@ fn help_json() -> serde_json::Value {
             {"long": "--dry-run", "help": "Preview changes without persisting (mutating commands only)"}
         ],
         "output_format": "All commands emit JSON to stdout. Errors are JSON on stderr.",
+        "input_conventions": {
+            "fields": ["--description", "--design", "--acceptance", "--json"],
+            "applies_to": ["create", "update"],
+            "rules": {
+                "@PATH": "value beginning with `@` is treated as a filesystem path and substituted with the file's contents",
+                "-": "value of exactly `-` reads the field from stdin (only one such flag per invocation; otherwise invalid_argument exit 1)",
+                "@@literal": "leading `@@` escapes to a literal `@` (e.g. `@@user` → `@user`)",
+                "missing_file": "non-existent path returns `not_found` JSON error and exit code 3"
+            }
+        },
         "exit_codes": {
             "0": "success",
             "1": "general error (invalid_field, io_error, yaml_error, etc.)",
@@ -1804,6 +1829,7 @@ mod tests {
         cli::ShowArgs {
             ids: vec![id.to_string()],
             pluck: None,
+            full: false,
         }
     }
 
@@ -1982,6 +2008,7 @@ mod tests {
                 "multi-03".to_string(),
             ],
             pluck: None,
+            full: false,
         };
         let mut buf = Vec::new();
         cmd_show_to_writer(sa, true, &mut buf).unwrap();
@@ -2014,6 +2041,7 @@ mod tests {
         let sa = cli::ShowArgs {
             ids: vec!["mp-01".to_string(), "mp-02".to_string()],
             pluck: Some("id,title".to_string()),
+            full: false,
         };
         let mut buf = Vec::new();
         cmd_show_to_writer(sa, true, &mut buf).unwrap();
@@ -2041,6 +2069,7 @@ mod tests {
         let sa = cli::ShowArgs {
             ids: vec!["mm-01".to_string(), "nonexistent".to_string()],
             pluck: None,
+            full: false,
         };
         let result = cmd_show(sa, false, false);
         assert!(result.is_err());
@@ -4135,6 +4164,7 @@ notes: []
         let sa = cli::ShowArgs {
             ids: vec!["pt-show1".to_string()],
             pluck: None,
+            full: false,
         };
         let result = cmd_show(sa, true, true);
         assert!(result.is_ok(), "pretty show failed: {:?}", result);
@@ -4174,6 +4204,7 @@ notes: []
         let sa = cli::ShowArgs {
             ids: vec!["pt-json1".to_string()],
             pluck: None,
+            full: false,
         };
         let mut buf: Vec<u8> = Vec::new();
         cmd_show_to_writer(sa, true, &mut buf).unwrap();

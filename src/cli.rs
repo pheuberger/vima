@@ -97,15 +97,15 @@ pub struct CreateArgs {
     #[arg(long)]
     pub tags: Option<String>,
 
-    /// Description
+    /// Description (accepts @PATH to read from a file, or `-` to read from stdin; `@@` escapes a literal `@`)
     #[arg(long, alias = "body")]
     pub description: Option<String>,
 
-    /// Design notes
+    /// Design notes (accepts @PATH or `-` for stdin)
     #[arg(long)]
     pub design: Option<String>,
 
-    /// Acceptance criteria
+    /// Acceptance criteria (accepts @PATH or `-` for stdin)
     #[arg(long)]
     pub acceptance: Option<String>,
 
@@ -129,7 +129,7 @@ pub struct CreateArgs {
     #[arg(long)]
     pub batch: bool,
 
-    /// Create from JSON object (all fields in one argument)
+    /// Create from JSON object (all fields in one argument; accepts @PATH or `-` for stdin)
     #[arg(long)]
     pub json: Option<String>,
 }
@@ -143,15 +143,15 @@ pub struct UpdateArgs {
     #[arg(long)]
     pub title: Option<String>,
 
-    /// New description
+    /// New description (accepts @PATH to read from a file, or `-` to read from stdin; `@@` escapes a literal `@`)
     #[arg(long, alias = "body")]
     pub description: Option<String>,
 
-    /// New design notes
+    /// New design notes (accepts @PATH or `-` for stdin)
     #[arg(long)]
     pub design: Option<String>,
 
-    /// New acceptance criteria
+    /// New acceptance criteria (accepts @PATH or `-` for stdin)
     #[arg(long)]
     pub acceptance: Option<String>,
 
@@ -179,7 +179,7 @@ pub struct UpdateArgs {
     #[arg(short = 't', long = "type")]
     pub ticket_type: Option<TicketType>,
 
-    /// Update from JSON object (all fields in one argument)
+    /// Update from JSON object (all fields in one argument; accepts @PATH or `-` for stdin)
     #[arg(long)]
     pub json: Option<String>,
 }
@@ -193,6 +193,9 @@ pub struct ShowArgs {
     /// Pluck a specific field from JSON output
     #[arg(long)]
     pub pluck: Option<String>,
+
+    #[arg(long, hide = true)]
+    pub full: bool,
 }
 
 #[derive(Args, Debug)]
