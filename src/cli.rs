@@ -33,7 +33,7 @@ pub enum Commands {
     Show(ShowArgs),
     /// List tickets
     List(FilterArgs),
-    /// List tickets that are ready (no open deps)
+    /// List open tickets that are ready to start (no open deps, not yet in_progress)
     Ready(FilterArgs),
     /// List tickets that are blocked
     Blocked(FilterArgs),

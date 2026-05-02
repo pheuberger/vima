@@ -1034,11 +1034,13 @@ fn cmd_ready(args: cli::FilterArgs, pretty: bool) -> Result<()> {
 
     let closed_ids = closed_id_set(&tickets);
 
-    // Keep only open/in_progress tickets where ALL deps are closed
+    // Keep only open tickets where ALL deps are closed.
+    // in_progress tickets are already claimed; ready listing must surface
+    // only tickets an agent can pick up.
     let candidates: Vec<ticket::Ticket> = tickets
         .into_iter()
         .filter(|t| {
-            (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+            t.status == ticket::Status::Open
                 && t.deps.iter().all(|dep_id| closed_ids.contains(dep_id))
         })
         .collect();
@@ -1390,7 +1392,7 @@ mod tests {
         let candidates: Vec<ticket::Ticket> = tickets
             .into_iter()
             .filter(|t| {
-                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+                t.status == ticket::Status::Open
                     && t.deps.iter().all(|dep_id| closed_ids.contains(dep_id))
             })
             .collect();
@@ -3809,6 +3811,37 @@ notes: []
         let arr = parsed.as_array().expect("expected JSON array");
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["id"], "rt-a");
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn ready_excludes_in_progress_tickets() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut a = create_args(Some("Open"));
+        a.id = Some("rip-a".to_string());
+        cmd_create(a, true, false, false).unwrap();
+
+        let mut b = create_args(Some("In progress"));
+        b.id = Some("rip-b".to_string());
+        cmd_create(b, true, false, false).unwrap();
+
+        cmd_start(start_args("rip-b"), true, false, false).unwrap();
+
+        let mut buf = Vec::new();
+        cmd_ready_to_writer(filter_args_default(), &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let arr = parsed.as_array().expect("expected JSON array");
+        let ids: Vec<&str> = arr.iter().map(|v| v["id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&"rip-a"), "open ticket should be ready");
+        assert!(
+            !ids.contains(&"rip-b"),
+            "in_progress ticket must not appear in ready list"
+        );
 
         std::env::remove_var("VIMA_DIR");
     }
