@@ -33,10 +33,6 @@ pub fn strip_heavy_fields(value: &mut serde_json::Value) {
     }
 }
 
-pub fn output_many(tickets: &[Ticket], pluck: &Option<String>, count: bool) -> Result<()> {
-    output_many_full(tickets, pluck, count, false)
-}
-
 pub(crate) fn output_many_full_to_writer<W: std::io::Write>(
     tickets: &[Ticket],
     pluck: &Option<String>,
@@ -409,7 +405,7 @@ mod tests {
         // so we verify the function returns Ok and count logic is correct.
         // The actual integer printing is tested via the len() call.
         assert_eq!(tickets.len(), 2);
-        let result = output_many(&tickets, &None, true);
+        let result = output_many_full(&tickets, &None, true, false);
         assert!(result.is_ok());
     }
 

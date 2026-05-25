@@ -46,7 +46,7 @@ pub enum Commands {
     /// Close a ticket
     Close(CloseArgs),
     /// Reopen a closed ticket
-    Reopen(IdArgs),
+    Reopen(ReopenArgs),
     /// Check if a ticket is ready
     IsReady(IdArgs),
     /// Add a note to a ticket
@@ -132,6 +132,10 @@ pub struct CreateArgs {
     /// Create from JSON object (all fields in one argument; accepts @PATH or `-` for stdin)
     #[arg(long, allow_hyphen_values = true)]
     pub json: Option<String>,
+
+    /// Pluck a specific field (or comma-separated fields) from output JSON
+    #[arg(long)]
+    pub pluck: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -182,6 +186,10 @@ pub struct UpdateArgs {
     /// Update from JSON object (all fields in one argument; accepts @PATH or `-` for stdin)
     #[arg(long, allow_hyphen_values = true)]
     pub json: Option<String>,
+
+    /// Pluck a specific field (or comma-separated fields) from output JSON
+    #[arg(long)]
+    pub pluck: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -251,6 +259,10 @@ pub struct StartArgs {
     /// Claim the ticket for this assignee (fails if already claimed by another)
     #[arg(short = 'a', long)]
     pub assignee: Option<String>,
+
+    /// Pluck a specific field (or comma-separated fields) from output JSON
+    #[arg(long)]
+    pub pluck: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -260,6 +272,10 @@ pub struct AddNoteArgs {
 
     /// Note text (reads from stdin if omitted)
     pub text: Option<String>,
+
+    /// Pluck a specific field (or comma-separated fields) from output JSON
+    #[arg(long)]
+    pub pluck: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -269,6 +285,10 @@ pub struct LinkArgs {
 
     /// Second ticket ID
     pub id_b: String,
+
+    /// Pluck a specific field (or comma-separated fields) from output JSON
+    #[arg(long)]
+    pub pluck: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -278,6 +298,20 @@ pub struct UndepArgs {
 
     /// Dependency ticket ID to remove
     pub dep_id: String,
+
+    /// Pluck a specific field (or comma-separated fields) from output JSON
+    #[arg(long)]
+    pub pluck: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ReopenArgs {
+    /// Ticket ID
+    pub id: String,
+
+    /// Pluck a specific field (or comma-separated fields) from output JSON
+    #[arg(long)]
+    pub pluck: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -294,6 +328,10 @@ pub struct CloseArgs {
     /// Reason for closing
     #[arg(long)]
     pub reason: Option<String>,
+
+    /// Pluck a specific field (or comma-separated fields) from output JSON
+    #[arg(long)]
+    pub pluck: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -340,6 +378,10 @@ pub struct AddDepArgs {
     /// Record this as: id blocks dep_id (reverse direction)
     #[arg(long)]
     pub blocks: bool,
+
+    /// Pluck a specific field (or comma-separated fields) from output JSON
+    #[arg(long)]
+    pub pluck: Option<String>,
 }
 
 #[derive(Args, Debug)]

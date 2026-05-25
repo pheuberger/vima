@@ -22,7 +22,17 @@ pub(crate) fn parse_tags(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+fn cmd_create(args: cli::CreateArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+    cmd_create_to_writer(args, exact, dry_run, pretty, &mut std::io::stdout())
+}
+
+fn cmd_create_to_writer<W: std::io::Write>(
+    mut args: cli::CreateArgs,
+    exact: bool,
+    dry_run: bool,
+    pretty: bool,
+    w: &mut W,
+) -> Result<()> {
     // Merge --title flag into positional title (flag takes precedence)
     if args.title.is_none() {
         args.title = args.title_flag.take();
@@ -103,7 +113,7 @@ fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool, pretty: boo
     if args.batch {
         let st = store::Store::open()?;
         let tickets = batch::batch_create(&st, exact)?;
-        output::output_many(&tickets, &None, false)?;
+        output::output_many_full_to_writer(&tickets, &args.pluck, false, false, w)?;
         return Ok(());
     }
 
@@ -189,7 +199,7 @@ fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool, pretty: boo
             "action": "create",
             "ticket": serde_json::to_value(&ticket)?,
         });
-        println!("{}", serde_json::to_string_pretty(&preview)?);
+        writeln!(w, "{}", serde_json::to_string_pretty(&preview)?)?;
         return Ok(());
     }
 
@@ -207,7 +217,7 @@ fn cmd_create(mut args: cli::CreateArgs, exact: bool, dry_run: bool, pretty: boo
     if pretty {
         eprintln!("Created {}", ticket_id);
     }
-    output::output_one(&ticket, &None)?;
+    output::output_one_to_writer(&ticket, &args.pluck, w)?;
 
     Ok(())
 }
@@ -236,6 +246,15 @@ fn cmd_show(args: cli::ShowArgs, exact: bool, pretty: bool) -> Result<()> {
 }
 
 fn cmd_add_note(args: cli::AddNoteArgs, exact: bool, pretty: bool) -> Result<()> {
+    cmd_add_note_to_writer(args, exact, pretty, &mut std::io::stdout())
+}
+
+fn cmd_add_note_to_writer<W: std::io::Write>(
+    args: cli::AddNoteArgs,
+    exact: bool,
+    pretty: bool,
+    w: &mut W,
+) -> Result<()> {
     use std::io::Read;
 
     let st = store::Store::open()?;
@@ -264,12 +283,21 @@ fn cmd_add_note(args: cli::AddNoteArgs, exact: bool, pretty: bool) -> Result<()>
     if pretty {
         eprintln!("Added note to {}", resolved);
     }
-    output::output_one(&updated, &None)?;
+    output::output_one_to_writer(&updated, &args.pluck, w)?;
 
     Ok(())
 }
 
 fn cmd_link(args: cli::LinkArgs, exact: bool, pretty: bool) -> Result<()> {
+    cmd_link_to_writer(args, exact, pretty, &mut std::io::stdout())
+}
+
+fn cmd_link_to_writer<W: std::io::Write>(
+    args: cli::LinkArgs,
+    exact: bool,
+    pretty: bool,
+    w: &mut W,
+) -> Result<()> {
     let st = store::Store::open()?;
     let id_a = st.resolve_id(&args.id_a, exact)?;
     let id_b = st.resolve_id(&args.id_b, exact)?;
@@ -296,12 +324,21 @@ fn cmd_link(args: cli::LinkArgs, exact: bool, pretty: bool) -> Result<()> {
     if pretty {
         eprintln!("Linked {} \u{2194} {}", id_a, id_b);
     }
-    output::output_many(&[updated_a, updated_b], &None, false)?;
+    output::output_many_full_to_writer(&[updated_a, updated_b], &args.pluck, false, false, w)?;
 
     Ok(())
 }
 
 fn cmd_unlink(args: cli::LinkArgs, exact: bool, pretty: bool) -> Result<()> {
+    cmd_unlink_to_writer(args, exact, pretty, &mut std::io::stdout())
+}
+
+fn cmd_unlink_to_writer<W: std::io::Write>(
+    args: cli::LinkArgs,
+    exact: bool,
+    pretty: bool,
+    w: &mut W,
+) -> Result<()> {
     let st = store::Store::open()?;
     let id_a = st.resolve_id(&args.id_a, exact)?;
     let id_b = st.resolve_id(&args.id_b, exact)?;
@@ -323,12 +360,22 @@ fn cmd_unlink(args: cli::LinkArgs, exact: bool, pretty: bool) -> Result<()> {
     if pretty {
         eprintln!("Unlinked {} \u{2194} {}", id_a, id_b);
     }
-    output::output_many(&[updated_a, updated_b], &None, false)?;
+    output::output_many_full_to_writer(&[updated_a, updated_b], &args.pluck, false, false, w)?;
 
     Ok(())
 }
 
 fn cmd_dep_add(args: cli::AddDepArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+    cmd_dep_add_to_writer(args, exact, dry_run, pretty, &mut std::io::stdout())
+}
+
+fn cmd_dep_add_to_writer<W: std::io::Write>(
+    args: cli::AddDepArgs,
+    exact: bool,
+    dry_run: bool,
+    pretty: bool,
+    w: &mut W,
+) -> Result<()> {
     let st = store::Store::open()?;
     let id = st.resolve_id(&args.id, exact)?;
     let dep_id = st.resolve_id(&args.dep_id, exact)?;
@@ -346,7 +393,7 @@ fn cmd_dep_add(args: cli::AddDepArgs, exact: bool, dry_run: bool, pretty: bool) 
     // Duplicate check — no-op if dep already present
     if target.deps.contains(&added_dep) {
         let updated = st.load_and_compute(&target_id)?;
-        output::output_one(&updated, &None)?;
+        output::output_one_to_writer(&updated, &args.pluck, w)?;
         return Ok(());
     }
 
@@ -364,7 +411,7 @@ fn cmd_dep_add(args: cli::AddDepArgs, exact: bool, dry_run: bool, pretty: bool) 
             "action": "dep_add",
             "ticket": serde_json::to_value(&target)?,
         });
-        println!("{}", serde_json::to_string_pretty(&preview)?);
+        writeln!(w, "{}", serde_json::to_string_pretty(&preview)?)?;
         return Ok(());
     }
 
@@ -378,12 +425,21 @@ fn cmd_dep_add(args: cli::AddDepArgs, exact: bool, dry_run: bool, pretty: bool) 
             eprintln!("Added dep {} to {}", dep_id, id);
         }
     }
-    output::output_one(&updated, &None)?;
+    output::output_one_to_writer(&updated, &args.pluck, w)?;
 
     Ok(())
 }
 
 fn cmd_undep(args: cli::UndepArgs, exact: bool, pretty: bool) -> Result<()> {
+    cmd_undep_to_writer(args, exact, pretty, &mut std::io::stdout())
+}
+
+fn cmd_undep_to_writer<W: std::io::Write>(
+    args: cli::UndepArgs,
+    exact: bool,
+    pretty: bool,
+    w: &mut W,
+) -> Result<()> {
     let st = store::Store::open()?;
     let id = st.resolve_id(&args.id, exact)?;
     let dep_id = st.resolve_id(&args.dep_id, exact)?;
@@ -401,12 +457,22 @@ fn cmd_undep(args: cli::UndepArgs, exact: bool, pretty: bool) -> Result<()> {
     if pretty {
         eprintln!("Removed dep {} from {}", dep_id, id);
     }
-    output::output_one(&updated, &None)?;
+    output::output_one_to_writer(&updated, &args.pluck, w)?;
 
     Ok(())
 }
 
-fn cmd_update(mut args: cli::UpdateArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+fn cmd_update(args: cli::UpdateArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+    cmd_update_to_writer(args, exact, dry_run, pretty, &mut std::io::stdout())
+}
+
+fn cmd_update_to_writer<W: std::io::Write>(
+    mut args: cli::UpdateArgs,
+    exact: bool,
+    dry_run: bool,
+    pretty: bool,
+    w: &mut W,
+) -> Result<()> {
     let mut resolver = input::InputResolver::new();
     args.json = resolver.resolve_opt(args.json)?;
     args.description = resolver.resolve_opt(args.description)?;
@@ -527,7 +593,7 @@ fn cmd_update(mut args: cli::UpdateArgs, exact: bool, dry_run: bool, pretty: boo
             "action": "update",
             "ticket": serde_json::to_value(&ticket)?,
         });
-        println!("{}", serde_json::to_string_pretty(&preview)?);
+        writeln!(w, "{}", serde_json::to_string_pretty(&preview)?)?;
         return Ok(());
     }
 
@@ -536,7 +602,7 @@ fn cmd_update(mut args: cli::UpdateArgs, exact: bool, dry_run: bool, pretty: boo
     if pretty {
         eprintln!("Updated {}", resolved);
     }
-    output::output_one(&updated, &None)?;
+    output::output_one_to_writer(&updated, &args.pluck, w)?;
 
     Ok(())
 }
@@ -548,6 +614,30 @@ fn cmd_set_status(
     verb: &str,
     dry_run: bool,
     pretty: bool,
+    pluck: &Option<String>,
+) -> Result<()> {
+    cmd_set_status_to_writer(
+        id,
+        exact,
+        target,
+        verb,
+        dry_run,
+        pretty,
+        pluck,
+        &mut std::io::stdout(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_set_status_to_writer<W: std::io::Write>(
+    id: &str,
+    exact: bool,
+    target: ticket::Status,
+    verb: &str,
+    dry_run: bool,
+    pretty: bool,
+    pluck: &Option<String>,
+    w: &mut W,
 ) -> Result<()> {
     let st = store::Store::open()?;
     let resolved = st.resolve_id(id, exact)?;
@@ -555,7 +645,7 @@ fn cmd_set_status(
 
     if ticket.status == target {
         let current = st.load_and_compute(&resolved)?;
-        output::output_one(&current, &None)?;
+        output::output_one_to_writer(&current, pluck, w)?;
         return Ok(());
     }
 
@@ -567,7 +657,7 @@ fn cmd_set_status(
             "action": verb.to_lowercase(),
             "ticket": serde_json::to_value(&ticket)?,
         });
-        println!("{}", serde_json::to_string_pretty(&preview)?);
+        writeln!(w, "{}", serde_json::to_string_pretty(&preview)?)?;
         return Ok(());
     }
 
@@ -576,12 +666,22 @@ fn cmd_set_status(
     if pretty {
         eprintln!("{} {}", verb, resolved);
     }
-    output::output_one(&updated, &None)?;
+    output::output_one_to_writer(&updated, pluck, w)?;
 
     Ok(())
 }
 
 fn cmd_start(args: cli::StartArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+    cmd_start_to_writer(args, exact, dry_run, pretty, &mut std::io::stdout())
+}
+
+fn cmd_start_to_writer<W: std::io::Write>(
+    args: cli::StartArgs,
+    exact: bool,
+    dry_run: bool,
+    pretty: bool,
+    w: &mut W,
+) -> Result<()> {
     let st = store::Store::open()?;
     let resolved = st.resolve_id(&args.id, exact)?;
     let mut ticket = st.read_ticket(&resolved)?;
@@ -593,7 +693,7 @@ fn cmd_start(args: cli::StartArgs, exact: bool, dry_run: bool, pretty: bool) -> 
                 Some(new) if new == current => {
                     // Idempotent: same assignee, already started
                     let current_ticket = st.load_and_compute(&resolved)?;
-                    output::output_one(&current_ticket, &None)?;
+                    output::output_one_to_writer(&current_ticket, &args.pluck, w)?;
                     return Ok(());
                 }
                 _ => {
@@ -607,7 +707,7 @@ fn cmd_start(args: cli::StartArgs, exact: bool, dry_run: bool, pretty: bool) -> 
         // No current assignee — if no new assignee either, idempotent no-op
         if args.assignee.is_none() {
             let current_ticket = st.load_and_compute(&resolved)?;
-            output::output_one(&current_ticket, &None)?;
+            output::output_one_to_writer(&current_ticket, &args.pluck, w)?;
             return Ok(());
         }
     }
@@ -623,7 +723,7 @@ fn cmd_start(args: cli::StartArgs, exact: bool, dry_run: bool, pretty: bool) -> 
             "action": "started",
             "ticket": serde_json::to_value(&ticket)?,
         });
-        println!("{}", serde_json::to_string_pretty(&preview)?);
+        writeln!(w, "{}", serde_json::to_string_pretty(&preview)?)?;
         return Ok(());
     }
 
@@ -632,12 +732,22 @@ fn cmd_start(args: cli::StartArgs, exact: bool, dry_run: bool, pretty: bool) -> 
     if pretty {
         eprintln!("Started {}", resolved);
     }
-    output::output_one(&updated, &None)?;
+    output::output_one_to_writer(&updated, &args.pluck, w)?;
 
     Ok(())
 }
 
 fn cmd_close(args: cli::CloseArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+    cmd_close_to_writer(args, exact, dry_run, pretty, &mut std::io::stdout())
+}
+
+fn cmd_close_to_writer<W: std::io::Write>(
+    args: cli::CloseArgs,
+    exact: bool,
+    dry_run: bool,
+    pretty: bool,
+    w: &mut W,
+) -> Result<()> {
     let st = store::Store::open()?;
     let mut closed_tickets = Vec::new();
 
@@ -676,16 +786,16 @@ fn cmd_close(args: cli::CloseArgs, exact: bool, dry_run: bool, pretty: bool) -> 
             "action": "close",
             "tickets": serde_json::to_value(&closed_tickets)?,
         });
-        println!("{}", serde_json::to_string_pretty(&preview)?);
+        writeln!(w, "{}", serde_json::to_string_pretty(&preview)?)?;
         return Ok(());
     }
 
-    output::output_many(&closed_tickets, &None, false)?;
+    output::output_many_full_to_writer(&closed_tickets, &args.pluck, false, false, w)?;
 
     Ok(())
 }
 
-fn cmd_reopen(args: cli::IdArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+fn cmd_reopen(args: cli::ReopenArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
     cmd_set_status(
         &args.id,
         exact,
@@ -693,6 +803,7 @@ fn cmd_reopen(args: cli::IdArgs, exact: bool, dry_run: bool, pretty: bool) -> Re
         "Reopened",
         dry_run,
         pretty,
+        &args.pluck,
     )
 }
 
@@ -1511,6 +1622,7 @@ mod tests {
             id: None,
             batch: false,
             json: None,
+            pluck: None,
         }
     }
 
@@ -2084,6 +2196,7 @@ mod tests {
         cli::AddNoteArgs {
             id: id.to_string(),
             text: text.map(|s| s.to_string()),
+            pluck: None,
         }
     }
 
@@ -2091,6 +2204,7 @@ mod tests {
         cli::LinkArgs {
             id_a: id_a.to_string(),
             id_b: id_b.to_string(),
+            pluck: None,
         }
     }
 
@@ -2304,6 +2418,7 @@ mod tests {
             id: id.to_string(),
             dep_id: dep_id.to_string(),
             blocks,
+            pluck: None,
         }
     }
 
@@ -2311,6 +2426,7 @@ mod tests {
         cli::UndepArgs {
             id: id.to_string(),
             dep_id: dep_id.to_string(),
+            pluck: None,
         }
     }
 
@@ -2703,6 +2819,7 @@ mod tests {
             status: None,
             ticket_type: None,
             json: None,
+            pluck: None,
         }
     }
 
@@ -2885,17 +3002,22 @@ mod tests {
         cli::StartArgs {
             id: id.to_string(),
             assignee: None,
+            pluck: None,
         }
     }
 
-    fn id_args(id: &str) -> cli::IdArgs {
-        cli::IdArgs { id: id.to_string() }
+    fn reopen_args(id: &str) -> cli::ReopenArgs {
+        cli::ReopenArgs {
+            id: id.to_string(),
+            pluck: None,
+        }
     }
 
     fn close_args(ids: Vec<&str>) -> cli::CloseArgs {
         cli::CloseArgs {
             ids: ids.iter().map(|s| s.to_string()).collect(),
             reason: None,
+            pluck: None,
         }
     }
 
@@ -3333,7 +3455,7 @@ notes: []
         cmd_create(ca, false, false, false).unwrap();
 
         cmd_close(close_args(vec!["ro-01"]), true, false, false).unwrap();
-        cmd_reopen(id_args("ro-01"), true, false, false).unwrap();
+        cmd_reopen(reopen_args("ro-01"), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("ro-01").unwrap();
@@ -3352,7 +3474,7 @@ notes: []
         ca.id = Some("ro-02".to_string());
         cmd_create(ca, false, false, false).unwrap();
 
-        let result = cmd_reopen(id_args("ro-02"), true, false, false);
+        let result = cmd_reopen(reopen_args("ro-02"), true, false, false);
         assert!(
             result.is_ok(),
             "reopen of open ticket should succeed: {:?}",
@@ -3377,7 +3499,7 @@ notes: []
         cmd_create(ca, false, false, false).unwrap();
 
         cmd_start(start_args("ro-03"), true, false, false).unwrap();
-        cmd_reopen(id_args("ro-03"), true, false, false).unwrap();
+        cmd_reopen(reopen_args("ro-03"), true, false, false).unwrap();
 
         let st = store::Store::open().unwrap();
         let ticket = st.read_ticket("ro-03").unwrap();
@@ -3743,6 +3865,7 @@ notes: []
             cli::CloseArgs {
                 ids: vec!["rca-a".to_string()],
                 reason: None,
+                pluck: None,
             },
             true,
             false,
@@ -3973,6 +4096,7 @@ notes: []
             cli::CloseArgs {
                 ids: vec!["irc-a".to_string()],
                 reason: None,
+                pluck: None,
             },
             true,
             false,
@@ -4001,6 +4125,7 @@ notes: []
             cli::CloseArgs {
                 ids: vec!["ird-a".to_string()],
                 reason: None,
+                pluck: None,
             },
             true,
             false,
@@ -4337,6 +4462,7 @@ notes: []
             cli::CloseArgs {
                 ids: vec!["pt-cls-a".to_string()],
                 reason: None,
+                pluck: None,
             },
             true,
             false,
@@ -4789,6 +4915,7 @@ notes: []
             cli::CloseArgs {
                 ids: vec!["cls-tg-a".to_string()],
                 reason: None,
+                pluck: None,
             },
             true,
             false,
@@ -4803,6 +4930,7 @@ notes: []
             cli::CloseArgs {
                 ids: vec!["cls-tg-b".to_string()],
                 reason: None,
+                pluck: None,
             },
             true,
             false,
@@ -4845,6 +4973,7 @@ notes: []
             cli::CloseArgs {
                 ids: vec!["blk-d1".to_string()],
                 reason: None,
+                pluck: None,
             },
             true,
             false,
@@ -4865,6 +4994,7 @@ notes: []
             cli::CloseArgs {
                 ids: vec!["blk-d2".to_string()],
                 reason: None,
+                pluck: None,
             },
             true,
             false,
@@ -4900,5 +5030,360 @@ notes: []
         assert!(arr.is_empty());
 
         std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_create_returns_only_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Plucked create"));
+        args.id = Some("pk-cr".to_string());
+        args.pluck = Some("id".to_string());
+        let mut buf = Vec::new();
+        cmd_create_to_writer(args, false, false, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed, serde_json::json!("pk-cr"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_create_multi_field_returns_object() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Multi pluck"));
+        args.id = Some("pk-cm".to_string());
+        args.pluck = Some("id,title".to_string());
+        let mut buf = Vec::new();
+        cmd_create_to_writer(args, false, false, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!({"id": "pk-cm", "title": "Multi pluck"})
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_absent_on_create_returns_full_ticket() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Full default"));
+        args.id = Some("pk-cd".to_string());
+        let mut buf = Vec::new();
+        cmd_create_to_writer(args, false, false, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let obj = parsed.as_object().expect("expected JSON object");
+        assert_eq!(obj["id"], "pk-cd");
+        assert_eq!(obj["title"], "Full default");
+        assert!(obj.contains_key("status"));
+        assert!(obj.contains_key("priority"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_update_returns_only_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("U"));
+        ca.id = Some("pk-up".to_string());
+        cmd_create(ca, false, false, false).unwrap();
+
+        let mut ua = update_args("pk-up");
+        ua.title = Some("Renamed".to_string());
+        ua.pluck = Some("title".to_string());
+        let mut buf = Vec::new();
+        cmd_update_to_writer(ua, true, false, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed, serde_json::json!("Renamed"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_start_returns_only_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("S"));
+        ca.id = Some("pk-st".to_string());
+        cmd_create(ca, false, false, false).unwrap();
+
+        let mut sa = start_args("pk-st");
+        sa.pluck = Some("id,status".to_string());
+        let mut buf = Vec::new();
+        cmd_start_to_writer(sa, true, false, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!({"id": "pk-st", "status": "in_progress"})
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_close_returns_array_of_plucked_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca1 = create_args(Some("C1"));
+        ca1.id = Some("pk-c1".to_string());
+        cmd_create(ca1, false, false, false).unwrap();
+        let mut ca2 = create_args(Some("C2"));
+        ca2.id = Some("pk-c2".to_string());
+        cmd_create(ca2, false, false, false).unwrap();
+
+        let mut cla = close_args(vec!["pk-c1", "pk-c2"]);
+        cla.pluck = Some("id".to_string());
+        let mut buf = Vec::new();
+        cmd_close_to_writer(cla, true, false, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed, serde_json::json!(["pk-c1", "pk-c2"]));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_reopen_returns_only_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("R"));
+        ca.id = Some("pk-ro".to_string());
+        cmd_create(ca, false, false, false).unwrap();
+        cmd_close(close_args(vec!["pk-ro"]), true, false, false).unwrap();
+
+        let mut ra = reopen_args("pk-ro");
+        ra.pluck = Some("status".to_string());
+        let mut buf = Vec::new();
+        cmd_set_status_to_writer(
+            &ra.id,
+            true,
+            ticket::Status::Open,
+            "Reopened",
+            false,
+            false,
+            &ra.pluck,
+            &mut buf,
+        )
+        .unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed, serde_json::json!("open"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_add_note_returns_only_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("N"));
+        ca.id = Some("pk-nt".to_string());
+        cmd_create(ca, false, false, false).unwrap();
+
+        let mut na = add_note_args("pk-nt", Some("first note"));
+        na.pluck = Some("id".to_string());
+        let mut buf = Vec::new();
+        cmd_add_note_to_writer(na, true, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed, serde_json::json!("pk-nt"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_dep_add_returns_only_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca1 = create_args(Some("D1"));
+        ca1.id = Some("pk-d1".to_string());
+        cmd_create(ca1, false, false, false).unwrap();
+        let mut ca2 = create_args(Some("D2"));
+        ca2.id = Some("pk-d2".to_string());
+        cmd_create(ca2, false, false, false).unwrap();
+
+        let mut da = add_dep_args("pk-d1", "pk-d2", false);
+        da.pluck = Some("id".to_string());
+        let mut buf = Vec::new();
+        cmd_dep_add_to_writer(da, true, false, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed, serde_json::json!("pk-d1"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_undep_returns_only_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca1 = create_args(Some("U1"));
+        ca1.id = Some("pk-u1".to_string());
+        cmd_create(ca1, false, false, false).unwrap();
+        let mut ca2 = create_args(Some("U2"));
+        ca2.id = Some("pk-u2".to_string());
+        cmd_create(ca2, false, false, false).unwrap();
+        cmd_dep_add(add_dep_args("pk-u1", "pk-u2", false), true, false, false).unwrap();
+
+        let mut ua = undep_args("pk-u1", "pk-u2");
+        ua.pluck = Some("id".to_string());
+        let mut buf = Vec::new();
+        cmd_undep_to_writer(ua, true, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed, serde_json::json!("pk-u1"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_link_returns_array_of_plucked_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca1 = create_args(Some("L1"));
+        ca1.id = Some("pk-l1".to_string());
+        cmd_create(ca1, false, false, false).unwrap();
+        let mut ca2 = create_args(Some("L2"));
+        ca2.id = Some("pk-l2".to_string());
+        cmd_create(ca2, false, false, false).unwrap();
+
+        let mut la = link_args("pk-l1", "pk-l2");
+        la.pluck = Some("id".to_string());
+        let mut buf = Vec::new();
+        cmd_link_to_writer(la, true, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed, serde_json::json!(["pk-l1", "pk-l2"]));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_unlink_returns_array_of_plucked_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca1 = create_args(Some("UL1"));
+        ca1.id = Some("pk-ul1".to_string());
+        cmd_create(ca1, false, false, false).unwrap();
+        let mut ca2 = create_args(Some("UL2"));
+        ca2.id = Some("pk-ul2".to_string());
+        cmd_create(ca2, false, false, false).unwrap();
+        cmd_link(link_args("pk-ul1", "pk-ul2"), true, false).unwrap();
+
+        let mut la = link_args("pk-ul1", "pk-ul2");
+        la.pluck = Some("id".to_string());
+        let mut buf = Vec::new();
+        cmd_unlink_to_writer(la, true, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed, serde_json::json!(["pk-ul1", "pk-ul2"]));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_idempotent_start_returns_only_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Idem"));
+        ca.id = Some("pk-id".to_string());
+        cmd_create(ca, false, false, false).unwrap();
+
+        let mut sa1 = start_args("pk-id");
+        sa1.assignee = Some("alice".to_string());
+        cmd_start(sa1, true, false, false).unwrap();
+
+        let mut sa2 = start_args("pk-id");
+        sa2.assignee = Some("alice".to_string());
+        sa2.pluck = Some("assignee".to_string());
+        let mut buf = Vec::new();
+        cmd_start_to_writer(sa2, true, false, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed, serde_json::json!("alice"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn pluck_on_dry_run_create_does_not_alter_envelope() {
+        // Invariant: --pluck must not penetrate the dry-run envelope.
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut args = create_args(Some("Dry run"));
+        args.id = Some("pk-dr".to_string());
+        args.pluck = Some("id".to_string());
+        let mut buf = Vec::new();
+        cmd_create_to_writer(args, false, true, false, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let obj = parsed.as_object().expect("envelope must be an object");
+        assert_eq!(obj["dry_run"], serde_json::json!(true));
+        assert_eq!(obj["action"], serde_json::json!("create"));
+        assert!(obj.contains_key("ticket"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    fn pluck_parses_on_all_mutation_commands() {
+        use clap::Parser;
+        let cases: &[&[&str]] = &[
+            &["vima", "create", "T", "--pluck", "id"],
+            &["vima", "update", "vi-0001", "--pluck", "id"],
+            &["vima", "start", "vi-0001", "--pluck", "id"],
+            &["vima", "close", "vi-0001", "--pluck", "id"],
+            &["vima", "reopen", "vi-0001", "--pluck", "id"],
+            &["vima", "add-note", "vi-0001", "hi", "--pluck", "id"],
+            &["vima", "dep", "add", "vi-0001", "vi-0002", "--pluck", "id"],
+            &["vima", "undep", "vi-0001", "vi-0002", "--pluck", "id"],
+            &["vima", "link", "vi-0001", "vi-0002", "--pluck", "id"],
+            &["vima", "unlink", "vi-0001", "vi-0002", "--pluck", "id"],
+        ];
+        for argv in cases {
+            let result = cli::Cli::try_parse_from(argv.iter().copied());
+            assert!(
+                result.is_ok(),
+                "failed to parse --pluck on {:?}: {:?}",
+                argv,
+                result.err().map(|e| e.to_string())
+            );
+        }
     }
 }
