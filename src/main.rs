@@ -853,6 +853,26 @@ fn cmd_init(_args: cli::InitArgs, pretty: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_root(_args: cli::RootArgs) -> Result<()> {
+    cmd_root_to_writer(&mut std::io::stdout())
+}
+
+fn cmd_root_to_writer<W: std::io::Write>(w: &mut W) -> Result<()> {
+    let root = store::find_vima_root()?;
+    let tickets = root.join("tickets");
+    let config = root.join("config.yml");
+    writeln!(
+        w,
+        "{}",
+        serde_json::json!({
+            "root": root.to_string_lossy(),
+            "tickets": tickets.to_string_lossy(),
+            "config": config.to_string_lossy(),
+        })
+    )?;
+    Ok(())
+}
+
 fn cmd_help(args: cli::HelpArgs) -> Result<()> {
     if args.brief {
         let json = help_json();
@@ -1279,7 +1299,7 @@ fn dispatch(cli: Cli) -> Result<()> {
 
     // Commands that don't need the store skip locking entirely
     match &cli.command {
-        Commands::Init(_) | Commands::Help(_) | Commands::External(_) => {}
+        Commands::Init(_) | Commands::Root(_) | Commands::Help(_) | Commands::External(_) => {}
         _ => {
             // Determine if the command mutates the store
             let is_mutating = matches!(
@@ -1338,6 +1358,7 @@ fn dispatch(cli: Cli) -> Result<()> {
     // Non-store commands (Init, Help, External) run without locking
     match cli.command {
         Commands::Init(args) => cmd_init(args, pretty),
+        Commands::Root(args) => cmd_root(args),
         Commands::Help(args) => cmd_help(args),
         Commands::External(args) => {
             let cmd = &args[0];
@@ -1593,6 +1614,62 @@ mod tests {
 
         cmd_init(init_args(), false).unwrap();
         cmd_init(init_args(), false).unwrap();
+    }
+
+    #[test]
+    #[serial(env)]
+    fn root_reports_resolved_store_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        std::env::remove_var("VIMA_DIR");
+        cmd_init(init_args(), false).unwrap();
+
+        let mut buf = Vec::new();
+        cmd_root_to_writer(&mut buf).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+
+        let expected = tmp.path().join(".vima").canonicalize().unwrap();
+        assert_eq!(json["root"].as_str().unwrap(), expected.to_string_lossy());
+        assert_eq!(
+            json["tickets"].as_str().unwrap(),
+            expected.join("tickets").to_string_lossy()
+        );
+        assert_eq!(
+            json["config"].as_str().unwrap(),
+            expected.join("config.yml").to_string_lossy()
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn root_resolves_from_subdirectory() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        std::env::remove_var("VIMA_DIR");
+        cmd_init(init_args(), false).unwrap();
+
+        let sub = tmp.path().join("a/b");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::env::set_current_dir(&sub).unwrap();
+
+        let mut buf = Vec::new();
+        cmd_root_to_writer(&mut buf).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+
+        let expected = tmp.path().join(".vima").canonicalize().unwrap();
+        assert_eq!(json["root"].as_str().unwrap(), expected.to_string_lossy());
+    }
+
+    #[test]
+    #[serial(env)]
+    fn root_errors_when_no_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        std::env::remove_var("VIMA_DIR");
+
+        let mut buf = Vec::new();
+        let err = cmd_root_to_writer(&mut buf).unwrap_err();
+        assert!(matches!(err, Error::NoVimaDir));
     }
 
     // ── create command tests ─────────────────────────────────────────────────
@@ -4549,7 +4626,8 @@ notes: []
         // All built-in commands must be present
         for expected in &[
             "create", "show", "list", "ready", "blocked", "closed", "update", "start", "close",
-            "reopen", "is-ready", "add-note", "dep", "undep", "link", "unlink", "init", "help",
+            "reopen", "is-ready", "add-note", "dep", "undep", "link", "unlink", "init", "root",
+            "help",
         ] {
             assert!(names.contains(expected), "missing command: {expected}");
         }

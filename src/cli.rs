@@ -61,6 +61,8 @@ pub enum Commands {
     Unlink(LinkArgs),
     /// Initialize a vima store in the current directory
     Init(InitArgs),
+    /// Print the resolved path of the active vima store
+    Root(RootArgs),
     /// Show help
     Help(HelpArgs),
     /// External plugin subcommand
@@ -336,6 +338,9 @@ pub struct CloseArgs {
 
 #[derive(Args, Debug)]
 pub struct InitArgs {}
+
+#[derive(Args, Debug)]
+pub struct RootArgs {}
 
 #[derive(Args, Debug)]
 pub struct HelpArgs {
