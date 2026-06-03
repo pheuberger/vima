@@ -239,6 +239,7 @@ pub fn create_from_spec(
         links: vec![],
         parent,
         created: jiff::Timestamp::now().to_string(),
+        block_reason: None,
         description,
         design,
         acceptance,

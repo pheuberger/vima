@@ -184,6 +184,7 @@ fn cmd_create_to_writer<W: std::io::Write>(
         links: vec![],
         parent,
         created: jiff::Timestamp::now().to_string(),
+        block_reason: None,
         description: args.description,
         design: args.design,
         acceptance: args.acceptance,
@@ -807,6 +808,97 @@ fn cmd_reopen(args: cli::ReopenArgs, exact: bool, dry_run: bool, pretty: bool) -
     )
 }
 
+fn cmd_block(args: cli::BlockArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+    cmd_block_to_writer(args, exact, dry_run, pretty, &mut std::io::stdout())
+}
+
+fn cmd_block_to_writer<W: std::io::Write>(
+    args: cli::BlockArgs,
+    exact: bool,
+    dry_run: bool,
+    pretty: bool,
+    w: &mut W,
+) -> Result<()> {
+    let st = store::Store::open()?;
+    let resolved = st.resolve_id(&args.id, exact)?;
+    let mut ticket = st.read_ticket(&resolved)?;
+
+    if ticket.status == ticket::Status::Closed {
+        return Err(Error::InvalidArgument(format!(
+            "cannot block closed ticket {resolved} — reopen it first with `vima reopen {resolved}`"
+        )));
+    }
+
+    ticket.status = ticket::Status::Blocked;
+    if args.reason.is_some() {
+        ticket.block_reason = args.reason.clone();
+    }
+
+    if dry_run {
+        let preview = serde_json::json!({
+            "dry_run": true,
+            "action": "blocked",
+            "ticket": serde_json::to_value(&ticket)?,
+        });
+        writeln!(w, "{}", serde_json::to_string_pretty(&preview)?)?;
+        return Ok(());
+    }
+
+    st.write_ticket(&ticket)?;
+    let updated = st.load_and_compute(&resolved)?;
+    if pretty {
+        eprintln!("Blocked {}", resolved);
+    }
+    output::output_one_to_writer(&updated, &args.pluck, w)?;
+
+    Ok(())
+}
+
+fn cmd_unblock(args: cli::UnblockArgs, exact: bool, dry_run: bool, pretty: bool) -> Result<()> {
+    cmd_unblock_to_writer(args, exact, dry_run, pretty, &mut std::io::stdout())
+}
+
+fn cmd_unblock_to_writer<W: std::io::Write>(
+    args: cli::UnblockArgs,
+    exact: bool,
+    dry_run: bool,
+    pretty: bool,
+    w: &mut W,
+) -> Result<()> {
+    let st = store::Store::open()?;
+    let resolved = st.resolve_id(&args.id, exact)?;
+    let mut ticket = st.read_ticket(&resolved)?;
+
+    // Idempotent: unblocking a ticket that isn't blocked just returns it unchanged.
+    if ticket.status != ticket::Status::Blocked {
+        let current = st.load_and_compute(&resolved)?;
+        output::output_one_to_writer(&current, &args.pluck, w)?;
+        return Ok(());
+    }
+
+    ticket.status = ticket::Status::Open;
+    ticket.block_reason = None;
+
+    if dry_run {
+        let preview = serde_json::json!({
+            "dry_run": true,
+            "action": "unblocked",
+            "ticket": serde_json::to_value(&ticket)?,
+        });
+        writeln!(w, "{}", serde_json::to_string_pretty(&preview)?)?;
+        return Ok(());
+    }
+
+    st.write_ticket(&ticket)?;
+    let updated = st.load_and_compute(&resolved)?;
+    if pretty {
+        eprintln!("Unblocked {}", resolved);
+    }
+    output::output_one_to_writer(&updated, &args.pluck, w)?;
+
+    Ok(())
+}
+
 fn cmd_dep_tree(args: cli::TreeArgs, exact: bool, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let id = st.resolve_id(&args.id, exact)?;
@@ -1158,6 +1250,37 @@ fn closed_id_set(tickets: &[ticket::Ticket]) -> std::collections::HashSet<String
         .collect()
 }
 
+/// Tickets an agent can pick up now: open, not yet claimed, with every dep closed.
+/// Explicitly blocked tickets (Status::Blocked) are excluded since they are not Open.
+fn select_ready_candidates(
+    tickets: Vec<ticket::Ticket>,
+    closed_ids: &std::collections::HashSet<String>,
+) -> Vec<ticket::Ticket> {
+    tickets
+        .into_iter()
+        .filter(|t| {
+            t.status == ticket::Status::Open
+                && t.deps.iter().all(|dep_id| closed_ids.contains(dep_id))
+        })
+        .collect()
+}
+
+/// Tickets that are blocked, either explicitly (Status::Blocked) or dep-derived
+/// (open/in_progress with at least one dep that is not yet closed).
+fn select_blocked_candidates(
+    tickets: Vec<ticket::Ticket>,
+    closed_ids: &std::collections::HashSet<String>,
+) -> Vec<ticket::Ticket> {
+    tickets
+        .into_iter()
+        .filter(|t| {
+            t.status == ticket::Status::Blocked
+                || ((t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
+                    && t.deps.iter().any(|dep_id| !closed_ids.contains(dep_id)))
+        })
+        .collect()
+}
+
 fn cmd_ready(args: cli::FilterArgs, pretty: bool) -> Result<()> {
     let st = store::Store::open()?;
     let mut tickets = st.read_all()?;
@@ -1168,13 +1291,7 @@ fn cmd_ready(args: cli::FilterArgs, pretty: bool) -> Result<()> {
     // Keep only open tickets where ALL deps are closed.
     // in_progress tickets are already claimed; ready listing must surface
     // only tickets an agent can pick up.
-    let candidates: Vec<ticket::Ticket> = tickets
-        .into_iter()
-        .filter(|t| {
-            t.status == ticket::Status::Open
-                && t.deps.iter().all(|dep_id| closed_ids.contains(dep_id))
-        })
-        .collect();
+    let candidates = select_ready_candidates(tickets, &closed_ids);
 
     // Apply tag/type/priority/assignee filters, but not status (already handled)
     let mut filter = filter::Filter::from_args(&args)?;
@@ -1195,14 +1312,7 @@ fn cmd_blocked(args: cli::FilterArgs, pretty: bool) -> Result<()> {
 
     let closed_ids = closed_id_set(&tickets);
 
-    // Keep only open/in_progress tickets where ANY dep is NOT closed
-    let candidates: Vec<ticket::Ticket> = tickets
-        .into_iter()
-        .filter(|t| {
-            (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
-                && t.deps.iter().any(|dep_id| !closed_ids.contains(dep_id))
-        })
-        .collect();
+    let candidates = select_blocked_candidates(tickets, &closed_ids);
 
     let mut filter = filter::Filter::from_args(&args)?;
     filter.status = None;
@@ -1262,6 +1372,11 @@ fn is_ready_state(id: &str, exact: bool) -> Result<(bool, Vec<String>)> {
         return Ok((true, vec![]));
     }
 
+    // Explicitly blocked tickets are never ready, regardless of deps.
+    if ticket.status == ticket::Status::Blocked {
+        return Ok((false, vec![]));
+    }
+
     let open_deps: Vec<String> = ticket
         .deps
         .iter()
@@ -1309,6 +1424,8 @@ fn dispatch(cli: Cli) -> Result<()> {
                     | Commands::Start(_)
                     | Commands::Close(_)
                     | Commands::Reopen(_)
+                    | Commands::Block(_)
+                    | Commands::Unblock(_)
                     | Commands::AddNote(_)
                     | Commands::Undep(_)
                     | Commands::Link(_)
@@ -1338,6 +1455,8 @@ fn dispatch(cli: Cli) -> Result<()> {
                 Commands::Start(args) => cmd_start(args, exact, dry_run, pretty),
                 Commands::Close(args) => cmd_close(args, exact, dry_run, pretty),
                 Commands::Reopen(args) => cmd_reopen(args, exact, dry_run, pretty),
+                Commands::Block(args) => cmd_block(args, exact, dry_run, pretty),
+                Commands::Unblock(args) => cmd_unblock(args, exact, dry_run, pretty),
                 Commands::IsReady(args) => cmd_is_ready(args, exact),
                 Commands::AddNote(args) => cmd_add_note(args, exact, pretty),
                 Commands::Dep(dep_args) => match dep_args.command {
@@ -1521,32 +1640,20 @@ mod tests {
         let mut tickets = st.read_all()?;
         deps::compute_reverse_fields(&mut tickets);
         let closed_ids = closed_id_set(&tickets);
-        let candidates: Vec<ticket::Ticket> = tickets
-            .into_iter()
-            .filter(|t| {
-                t.status == ticket::Status::Open
-                    && t.deps.iter().all(|dep_id| closed_ids.contains(dep_id))
-            })
-            .collect();
+        let candidates = select_ready_candidates(tickets, &closed_ids);
         let mut filter = filter::Filter::from_args(&args)?;
         filter.status = None;
         let filtered = filter::apply_filters(candidates, &filter);
         output::output_many_full_to_writer(&filtered, &args.pluck, args.count, args.full, w)
     }
 
-    /// Mirror of cmd_blocked that writes output to an arbitrary writer.
+    /// Writer-capturing wrapper around the production blocked-candidate selection.
     fn cmd_blocked_to_writer<W: std::io::Write>(args: cli::FilterArgs, w: &mut W) -> Result<()> {
         let st = store::Store::open()?;
         let mut tickets = st.read_all()?;
         deps::compute_reverse_fields(&mut tickets);
         let closed_ids = closed_id_set(&tickets);
-        let candidates: Vec<ticket::Ticket> = tickets
-            .into_iter()
-            .filter(|t| {
-                (t.status == ticket::Status::Open || t.status == ticket::Status::InProgress)
-                    && t.deps.iter().any(|dep_id| !closed_ids.contains(dep_id))
-            })
-            .collect();
+        let candidates = select_blocked_candidates(tickets, &closed_ids);
         let mut filter = filter::Filter::from_args(&args)?;
         filter.status = None;
         let filtered = filter::apply_filters(candidates, &filter);
@@ -3096,6 +3203,243 @@ mod tests {
             reason: None,
             pluck: None,
         }
+    }
+
+    fn block_args(id: &str, reason: Option<&str>) -> cli::BlockArgs {
+        cli::BlockArgs {
+            id: id.to_string(),
+            reason: reason.map(|s| s.to_string()),
+            pluck: None,
+        }
+    }
+
+    fn unblock_args(id: &str) -> cli::UnblockArgs {
+        cli::UnblockArgs {
+            id: id.to_string(),
+            pluck: None,
+        }
+    }
+
+    #[test]
+    #[serial(env)]
+    fn block_sets_status_and_reason() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Block test"));
+        ca.id = Some("bl-01".to_string());
+        cmd_create(ca, true, false, false).unwrap();
+
+        cmd_block(
+            block_args("bl-01", Some("waiting on API")),
+            true,
+            false,
+            false,
+        )
+        .unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("bl-01").unwrap();
+        assert_eq!(ticket.status, ticket::Status::Blocked);
+        assert_eq!(ticket.block_reason.as_deref(), Some("waiting on API"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn block_without_reason_sets_status_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Block no reason"));
+        ca.id = Some("bl-02".to_string());
+        cmd_create(ca, true, false, false).unwrap();
+
+        cmd_block(block_args("bl-02", None), true, false, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("bl-02").unwrap();
+        assert_eq!(ticket.status, ticket::Status::Blocked);
+        assert!(ticket.block_reason.is_none());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn block_on_in_progress_preserves_assignee() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Block in progress"));
+        ca.id = Some("bl-03".to_string());
+        cmd_create(ca, true, false, false).unwrap();
+
+        let mut sa = start_args("bl-03");
+        sa.assignee = Some("agent-1".to_string());
+        cmd_start(sa, true, false, false).unwrap();
+
+        cmd_block(block_args("bl-03", None), true, false, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("bl-03").unwrap();
+        assert_eq!(ticket.status, ticket::Status::Blocked);
+        assert_eq!(ticket.assignee.as_deref(), Some("agent-1"));
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn block_closed_ticket_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Block closed"));
+        ca.id = Some("bl-04".to_string());
+        cmd_create(ca, true, false, false).unwrap();
+        cmd_close(close_args(vec!["bl-04"]), true, false, false).unwrap();
+
+        let err = cmd_block(block_args("bl-04", None), true, false, false).unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument(_)));
+
+        // Status must be unchanged
+        let st = store::Store::open().unwrap();
+        assert_eq!(
+            st.read_ticket("bl-04").unwrap().status,
+            ticket::Status::Closed
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn unblock_returns_to_open_and_clears_reason() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Unblock test"));
+        ca.id = Some("bl-05".to_string());
+        cmd_create(ca, true, false, false).unwrap();
+
+        cmd_block(block_args("bl-05", Some("external")), true, false, false).unwrap();
+        cmd_unblock(unblock_args("bl-05"), true, false, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("bl-05").unwrap();
+        assert_eq!(ticket.status, ticket::Status::Open);
+        assert!(ticket.block_reason.is_none());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn unblock_non_blocked_is_idempotent_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Unblock noop"));
+        ca.id = Some("bl-06".to_string());
+        cmd_create(ca, true, false, false).unwrap();
+
+        // Never blocked — unblock should be a no-op leaving status open
+        let result = cmd_unblock(unblock_args("bl-06"), true, false, false);
+        assert!(result.is_ok());
+
+        let st = store::Store::open().unwrap();
+        assert_eq!(
+            st.read_ticket("bl-06").unwrap().status,
+            ticket::Status::Open
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn blocked_status_excluded_from_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Ready or blocked"));
+        ca.id = Some("bl-07".to_string());
+        cmd_create(ca, true, false, false).unwrap();
+
+        // With no deps it would be ready; blocking must remove it from ready.
+        cmd_block(block_args("bl-07", None), true, false, false).unwrap();
+
+        let mut buf = Vec::new();
+        cmd_ready_to_writer(filter_args_default(), &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            !out.contains("bl-07"),
+            "blocked ticket must not appear in ready: {out}"
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn blocked_status_appears_in_blocked_listing() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Manually blocked"));
+        ca.id = Some("bl-08".to_string());
+        cmd_create(ca, true, false, false).unwrap();
+        cmd_block(block_args("bl-08", None), true, false, false).unwrap();
+
+        let mut buf = Vec::new();
+        cmd_blocked_to_writer(filter_args_default(), &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("bl-08"),
+            "status-blocked ticket must appear in blocked listing: {out}"
+        );
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn is_ready_state_false_for_blocked_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Is ready blocked"));
+        ca.id = Some("bl-09".to_string());
+        cmd_create(ca, true, false, false).unwrap();
+        cmd_block(block_args("bl-09", None), true, false, false).unwrap();
+
+        let (ready, open_deps) = is_ready_state("bl-09", true).unwrap();
+        assert!(!ready, "blocked ticket must not be ready");
+        assert!(open_deps.is_empty());
+
+        std::env::remove_var("VIMA_DIR");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn block_dry_run_does_not_persist() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_vima(&tmp);
+
+        let mut ca = create_args(Some("Block dry run"));
+        ca.id = Some("bl-10".to_string());
+        cmd_create(ca, true, false, false).unwrap();
+
+        cmd_block(block_args("bl-10", Some("x")), true, true, false).unwrap();
+
+        let st = store::Store::open().unwrap();
+        let ticket = st.read_ticket("bl-10").unwrap();
+        assert_eq!(ticket.status, ticket::Status::Open);
+        assert!(ticket.block_reason.is_none());
+
+        std::env::remove_var("VIMA_DIR");
     }
 
     #[test]

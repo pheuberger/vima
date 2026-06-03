@@ -107,6 +107,7 @@ fn colorize_status(status: &Status) -> String {
     match status {
         Status::Open => status.as_str().green().to_string(),
         Status::InProgress => status.as_str().yellow().to_string(),
+        Status::Blocked => status.as_str().red().to_string(),
         Status::Closed => status.as_str().dimmed().to_string(),
     }
 }
@@ -304,6 +305,7 @@ mod tests {
             links: vec![],
             parent: None,
             created: "2026-04-02T00:00:00Z".to_string(),
+            block_reason: None,
             description: None,
             design: None,
             acceptance: None,
@@ -509,6 +511,7 @@ mod tests {
             links: vec![],
             parent: None,
             created: "2026-04-02T00:00:00Z".to_string(),
+            block_reason: None,
             description: Some("A detailed description\nwith multiple lines.".to_string()),
             design: Some("Design notes here.".to_string()),
             acceptance: Some("Must pass all tests.".to_string()),

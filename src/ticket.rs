@@ -8,6 +8,7 @@ use std::fmt;
 pub enum Status {
     Open,
     InProgress,
+    Blocked,
     Closed,
 }
 
@@ -16,6 +17,7 @@ impl Status {
         match self {
             Status::Open => "open",
             Status::InProgress => "in_progress",
+            Status::Blocked => "blocked",
             Status::Closed => "closed",
         }
     }
@@ -85,6 +87,9 @@ pub struct Ticket {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     pub created: String,
+    /// Optional human-readable reason a ticket is blocked. Set by `block`, cleared by `unblock`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,6 +116,11 @@ mod tests {
     }
 
     #[test]
+    fn status_blocked_as_str() {
+        assert_eq!(Status::Blocked.as_str(), "blocked");
+    }
+
+    #[test]
     fn ticket_type_bug_as_str() {
         assert_eq!(TicketType::Bug.as_str(), "bug");
     }
@@ -131,6 +141,7 @@ mod tests {
             links: vec![],
             parent: None,
             created: "2026-04-02T00:00:00Z".to_string(),
+            block_reason: None,
             description: None,
             design: None,
             acceptance: None,
@@ -183,6 +194,7 @@ mod tests {
             links: vec!["link1".to_string()],
             parent: Some("parent1".to_string()),
             created: "2026-04-02T00:00:00Z".to_string(),
+            block_reason: None,
             description: Some("desc".to_string()),
             design: Some("design".to_string()),
             acceptance: Some("acceptance".to_string()),
@@ -247,6 +259,7 @@ mod tests {
             links: vec![],
             parent: None,
             created: "2026-04-02T00:00:00Z".to_string(),
+            block_reason: None,
             description: None,
             design: None,
             acceptance: None,
@@ -282,6 +295,7 @@ mod tests {
             links: vec![],
             parent: None,
             created: "2026-04-02T00:00:00Z".to_string(),
+            block_reason: None,
             description: None,
             design: None,
             acceptance: None,
@@ -324,6 +338,7 @@ mod tests {
         let variants = vec![
             (Status::Open, "open"),
             (Status::InProgress, "in_progress"),
+            (Status::Blocked, "blocked"),
             (Status::Closed, "closed"),
         ];
         for (status, expected_str) in variants {
@@ -367,6 +382,7 @@ mod tests {
             links: vec!["https://example.com".to_string()],
             parent: Some("parent-1".to_string()),
             created: "2026-01-15T10:00:00Z".to_string(),
+            block_reason: None,
             description: Some("A full description".to_string()),
             design: Some("Design notes here".to_string()),
             acceptance: Some("All tests pass".to_string()),
@@ -423,6 +439,7 @@ mod tests {
             links: vec![],
             parent: None,
             created: "2026-04-02T00:00:00Z".to_string(),
+            block_reason: None,
             description: None,
             design: None,
             acceptance: None,

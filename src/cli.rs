@@ -47,6 +47,10 @@ pub enum Commands {
     Close(CloseArgs),
     /// Reopen a closed ticket
     Reopen(ReopenArgs),
+    /// Mark a ticket blocked (set status to blocked, optionally with a reason)
+    Block(BlockArgs),
+    /// Clear a ticket's blocked status (set status back to open)
+    Unblock(UnblockArgs),
     /// Check if a ticket is ready
     IsReady(IdArgs),
     /// Add a note to a ticket
@@ -307,6 +311,30 @@ pub struct UndepArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct BlockArgs {
+    /// Ticket ID
+    pub id: String,
+
+    /// Reason the ticket is blocked (stored on the ticket, shown in output)
+    #[arg(long)]
+    pub reason: Option<String>,
+
+    /// Pluck a specific field (or comma-separated fields) from output JSON
+    #[arg(long)]
+    pub pluck: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct UnblockArgs {
+    /// Ticket ID
+    pub id: String,
+
+    /// Pluck a specific field (or comma-separated fields) from output JSON
+    #[arg(long)]
+    pub pluck: Option<String>,
+}
+
+#[derive(Args, Debug)]
 pub struct ReopenArgs {
     /// Ticket ID
     pub id: String,
@@ -546,7 +574,8 @@ mod tests {
     fn all_subcommands_recognized() {
         let subcommands = [
             "create", "show", "list", "ready", "blocked", "closed", "update", "start", "close",
-            "reopen", "is-ready", "add-note", "dep", "undep", "link", "unlink", "init", "help",
+            "reopen", "block", "unblock", "is-ready", "add-note", "dep", "undep", "link", "unlink",
+            "init", "help",
         ];
         for sub in &subcommands {
             // Each subcommand without required args should give a usage error, not "unknown subcommand"
@@ -575,7 +604,7 @@ mod tests {
     // 15. Valid status values accepted
     #[test]
     fn valid_status_values() {
-        for s in &["open", "in_progress", "closed"] {
+        for s in &["open", "in_progress", "blocked", "closed"] {
             let cli = parse(&["vima", "list", "--status", s]).unwrap();
             if let Commands::List(f) = cli.command {
                 assert!(f.status.is_some());

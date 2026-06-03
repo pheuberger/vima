@@ -301,6 +301,7 @@ impl Store {
         ));
 
         for (key, val) in &[
+            ("block_reason", &ticket.block_reason),
             ("description", &ticket.description),
             ("design", &ticket.design),
             ("acceptance", &ticket.acceptance),
@@ -674,6 +675,7 @@ This is the **markdown** body.
             links: vec!["https://example.com".to_string()],
             parent: Some("rt-parent1".to_string()),
             created: "2026-04-02T10:00:00Z".to_string(),
+            block_reason: None,
             description: Some("First line\nSecond line".to_string()),
             design: Some("Design notes".to_string()),
             acceptance: Some("First criterion\nSecond criterion".to_string()),
@@ -850,6 +852,7 @@ parent: blocker
             links: vec![],
             parent: None,
             created: "2026-04-02T00:00:00Z".to_string(),
+            block_reason: None,
             description: None,
             design: None,
             acceptance: None,

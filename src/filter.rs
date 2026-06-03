@@ -131,6 +131,7 @@ mod tests {
             links: vec![],
             parent: None,
             created: "2026-04-02T00:00:00Z".to_string(),
+            block_reason: None,
             description: None,
             design: None,
             acceptance: None,
