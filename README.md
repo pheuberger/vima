@@ -106,7 +106,7 @@ vima create "Title" [options]
 ```sh
 vima list [options]       # Open tickets (default)
 vima ready [options]      # Tickets with no open dependencies
-vima blocked [options]    # Tickets with open dependencies
+vima blocked [options]    # Tickets explicitly blocked or with open dependencies
 vima closed [options]     # Recently closed tickets (default limit: 20)
 ```
 
@@ -118,7 +118,7 @@ All list commands share these filters:
 | `-p, --priority RANGE` | Filter by priority (`2` or `0-2`) |
 | `-T, --tag TAG` | Filter by tag (repeatable, OR semantics) |
 | `-a, --assignee NAME` | Filter by assignee |
-| `--status STATUS` | Filter by status (`open`, `in_progress`, `closed`) |
+| `--status STATUS` | Filter by status (`open`, `in_progress`, `blocked`, `closed`) |
 | `--limit N` | Limit results |
 | `--pluck FIELD` | Extract field(s): `--pluck id` or `--pluck id,title` |
 | `--count` | Print count only |
@@ -144,6 +144,8 @@ Accepts `--title`, `--description`, `--design`, `--acceptance`, `-p/--priority`,
 
 ```sh
 vima start ID                  # open -> in_progress
+vima block ID [--reason "..."] # -> blocked (optionally records why)
+vima unblock ID                # blocked -> open (idempotent if not blocked)
 vima close ID [--reason "..."] # -> closed (adds note with reason)
 vima close ID1 ID2 ID3         # close multiple at once
 vima reopen ID                 # closed -> open
