@@ -101,11 +101,15 @@ vima create "Title" [options]
 | `--parent ID` | Parent ticket |
 | `--id ID` | Explicit ID (otherwise auto-generated) |
 
+`--title`/`--body` are accepted as aliases for the positional title and `--description`.
+
+The long-form fields `--description`, `--design`, and `--acceptance` accept sentinels: a value beginning with `@` reads from that file path (`@notes.md`), a value of exactly `-` reads from stdin (one such flag per invocation), and `@@` escapes a literal leading `@`. Same sentinels apply on `update`.
+
 ### Listing tickets
 
 ```sh
 vima list [options]       # Open tickets (default)
-vima ready [options]      # Tickets with no open dependencies
+vima ready [options]      # Open tickets with all deps closed, not yet in_progress
 vima blocked [options]    # Tickets explicitly blocked or with open dependencies
 vima closed [options]     # Recently closed tickets (default limit: 20)
 ```
@@ -129,6 +133,7 @@ Results are sorted by priority (ascending), then by ID.
 
 ```sh
 vima show ID
+vima show ID1 ID2 ID3      # show multiple tickets (one JSON object per line)
 vima show ID --pluck title
 ```
 
@@ -166,6 +171,7 @@ vima dep add ID DEP_ID --blocks  # ID blocks DEP_ID (reverse)
 vima undep ID DEP_ID             # Remove dependency
 vima dep tree ID                 # Show dependency tree
 vima dep tree ID --full          # Full transitive tree (allow dupes)
+vima dep tree ID --flat          # Flat array of {id, parent_id, depth, status, title}
 vima dep cycle                   # Detect cycles (exits 2 if found)
 vima is-ready ID                 # Exits 0 if ready, non-zero if blocked
 ```
@@ -178,6 +184,23 @@ Cycle detection runs automatically when adding dependencies. A dependency that w
 vima link ID_A ID_B              # Bidirectional link
 vima unlink ID_A ID_B            # Remove link
 ```
+
+### Store & global flags
+
+```sh
+vima init                        # Initialize a .vima store in the current directory
+vima root                        # Print the resolved path of the active store
+```
+
+These global flags apply to every command:
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview a mutation without persisting it |
+| `--exact` | Disable fuzzy ID matching (or set `VIMA_EXACT=1`) |
+| `--pretty` | Human-only colored output (agents: use default JSON) |
+
+Mutation commands (`create`, `update`, `start`, `close`, `reopen`, `block`, `unblock`, `add-note`) also accept `--pluck` to return only selected fields of the resulting ticket.
 
 ## Output format
 
@@ -222,6 +245,8 @@ vima list --pretty
 | `2` | Cycle detected (`dep cycle`) or ticket blocked (`is-ready`) |
 | `3` | Not found or ambiguous ID |
 | `4` | Conflict (ID already exists) |
+| `5` | Stale write (version conflict) -- re-read and retry |
+| `6` | Already claimed (`start` with a different assignee) |
 
 ## Batch create
 

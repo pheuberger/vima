@@ -15,20 +15,25 @@ vima close ID --reason "Done"       # close with reason
 
 ## Key commands
 
-- `create "Title" [flags]` — create ticket. Flags: `-t type`, `-p priority`, `--dep ID`, `--tags a,b`, `--batch` for JSON stdin
+- `create "Title" [flags]` — create ticket. Flags: `-t type`, `-p priority`, `--dep ID`, `--tags a,b`, `--batch` for JSON stdin. `--title`/`--body` alias title/description
 - `list [filters]` — open tickets. Filters: `--tag`, `--type`, `--priority`, `--assignee`, `--status`
-- `ready` — tickets with no open dependencies
-- `blocked` — tickets with open dependencies
+- `ready` — open tickets with all deps closed, not yet in_progress
+- `blocked` — tickets with `blocked` status OR open/in_progress tickets with an unclosed dep
 - `closed` — closed tickets
-- `show ID` — single ticket detail
+- `show ID [ID...]` — ticket detail; accepts multiple IDs
 - `update ID [flags]` — update fields: `--title`, `--description`, `--priority`, `--tags`, `--status`, `--type`
-- `start ID` — set status to in_progress
+- `start ID [--assignee NAME]` — set status to in_progress; exit 6 if claimed by another assignee
 - `close ID [--reason]` — close ticket(s)
 - `reopen ID` — reopen closed ticket
+- `block ID [--reason]` — set status to blocked
+- `unblock ID` — clear blocked status back to open (idempotent)
 - `dep add ID DEP` — add dependency; `--blocks` reverses direction
+- `undep ID DEP` — remove dependency
 - `dep tree ID` — show dependency tree
 - `is-ready ID` — exit 0 if ready, 2 if blocked
 - `add-note ID "text"` — add note (reads stdin if no text arg)
+- `link ID_A ID_B` / `unlink ID_A ID_B` — symmetric links
+- `init` — create a `.vima` store; `root` — print resolved store path
 
 ## Output control
 
@@ -37,6 +42,8 @@ vima close ID --reason "Done"       # close with reason
 - `--count` — integer count only
 - `--full` — include heavy fields (description, notes, body) in list output
 - `--pretty` — human-readable colored table
+- `--pluck` also works on mutation commands (create/update/start/close/block/unblock/add-note)
+- `--description`/`--design`/`--acceptance` accept `@PATH` (read file), `-` (read stdin), `@@` (literal `@`); same on update
 
 ## Exit codes
 
@@ -45,6 +52,8 @@ vima close ID --reason "Done"       # close with reason
 - 2: cycle detected or ticket blocked
 - 3: not found or ambiguous ID
 - 4: conflict (id_exists)
+- 5: stale write (version conflict) — re-read and retry
+- 6: already claimed (start with a different assignee)
 
 ## Error format (stderr)
 
@@ -56,6 +65,7 @@ vima close ID --reason "Done"       # close with reason
 ## Automation
 
 - `VIMA_EXACT=1` or `--exact` — disable fuzzy ID matching
+- `--dry-run` — preview any mutation without persisting
 - `--batch` — create multiple tickets from JSON stdin with `$1`, `$2` back-references
 - No interactive prompts — fully non-interactive by design
 - JSON to stdout, errors to stderr — pipe-safe
