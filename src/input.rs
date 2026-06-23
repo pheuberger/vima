@@ -30,7 +30,10 @@ impl InputResolver {
         if trimmed == "-" {
             if self.stdin_consumed {
                 return Err(Error::InvalidArgument(
-                    "only one flag may read from stdin (-) per invocation".into(),
+                    "only one flag may read from stdin (-) per invocation; \
+                     pass every field as one object via `--json -`, \
+                     or read the other fields from files with @PATH"
+                        .into(),
                 ));
             }
             self.stdin_consumed = true;
@@ -128,6 +131,26 @@ mod tests {
         let err = r.resolve("-".into()).unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)));
         assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn second_stdin_error_points_to_json_and_at_path() {
+        // Agents hit this wall; the message must name the fix, not just the
+        // failure (CLAUDE.md actionable-errors principle).
+        let mut r = InputResolver {
+            stdin_consumed: true,
+        };
+        let Error::InvalidArgument(msg) = r.resolve("-".into()).unwrap_err() else {
+            panic!("expected InvalidArgument");
+        };
+        assert!(
+            msg.contains("--json -"),
+            "message should suggest `--json -`: {msg}"
+        );
+        assert!(
+            msg.contains("@PATH"),
+            "message should suggest @PATH fallback: {msg}"
+        );
     }
 
     #[test]

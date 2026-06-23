@@ -1043,6 +1043,24 @@ fn cmd_help(args: cli::HelpArgs) -> Result<()> {
     Ok(())
 }
 
+/// Concrete invocation examples surfaced in per-command `help --json`. Kept
+/// here (not in clap derive) so agents landing on a single command see the
+/// recommended multi-field path without reading the global conventions.
+fn command_examples(name: &str) -> Option<Vec<&'static str>> {
+    match name {
+        "create" => Some(vec![
+            "vima create \"Add index\" --priority high",
+            "printf '%s' \"$json\" | vima create --json -  # all fields as one object on stdin",
+            "vima create \"Title\" --description @desc.md --acceptance @acc.md  # fields from files",
+        ]),
+        "update" => Some(vec![
+            "vima update vi-1a2b --status in_progress",
+            "printf '%s' \"$json\" | vima update vi-1a2b --json -  # multiple fields as one object on stdin",
+        ]),
+        _ => None,
+    }
+}
+
 fn help_json() -> serde_json::Value {
     let cmd = Cli::command();
     let mut commands = Vec::new();
@@ -1120,6 +1138,9 @@ fn help_json() -> serde_json::Value {
         if !subcommands.is_empty() {
             cmd_json["subcommands"] = serde_json::json!(subcommands);
         }
+        if let Some(examples) = command_examples(&name) {
+            cmd_json["examples"] = serde_json::json!(examples);
+        }
         commands.push(cmd_json);
     }
 
@@ -1147,9 +1168,10 @@ fn help_json() -> serde_json::Value {
         "input_conventions": {
             "fields": ["--description", "--design", "--acceptance", "--json"],
             "applies_to": ["create", "update"],
+            "recommended": "To set several long/multi-line fields at once, send one JSON object on stdin via `--json -` (e.g. `printf '%s' \"$json\" | vima create --json -`). Stdin is a single stream, so only one flag can read `-`; `--json -` carries every field unambiguously. Use `@PATH` when content already lives in files.",
             "rules": {
                 "@PATH": "value beginning with `@` is treated as a filesystem path and substituted with the file's contents",
-                "-": "value of exactly `-` reads the field from stdin (only one such flag per invocation; otherwise invalid_argument exit 1)",
+                "-": "value of exactly `-` reads the field from stdin (only one such flag per invocation; for multiple fields use `--json -` instead, otherwise invalid_argument exit 1)",
                 "@@literal": "leading `@@` escapes to a literal `@` (e.g. `@@user` → `@user`)",
                 "missing_file": "non-existent path returns `not_found` JSON error and exit code 3"
             }
@@ -5039,6 +5061,51 @@ notes: []
                 "exit_codes missing code {code}"
             );
         }
+    }
+
+    #[test]
+    fn help_json_create_and_update_show_json_stdin_example() {
+        // Per-command help is where an agent lands after `help create`; it must
+        // carry a concrete `--json -` example, not just the global convention.
+        let json = help_json();
+        let commands = json["commands"].as_array().unwrap();
+        for name in ["create", "update"] {
+            let cmd = commands
+                .iter()
+                .find(|c| c["name"].as_str() == Some(name))
+                .unwrap_or_else(|| panic!("{name} command missing"));
+            let examples = cmd["examples"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{name} should carry examples"));
+            assert!(
+                examples
+                    .iter()
+                    .any(|e| e.as_str().is_some_and(|s| s.contains("--json -"))),
+                "{name} examples should include a `--json -` invocation"
+            );
+        }
+    }
+
+    #[test]
+    fn help_json_recommends_json_stdin_for_multi_field() {
+        // Agents setting several long fields at once should learn the single
+        // unambiguous path (one JSON object on stdin) rather than discovering
+        // the two-stdin dead end by trial.
+        let json = help_json();
+        let conv = &json["input_conventions"];
+        let rec = conv["recommended"]
+            .as_str()
+            .expect("input_conventions should carry a `recommended` pattern");
+        assert!(
+            rec.contains("--json -"),
+            "recommended pattern should point to `--json -`: {rec}"
+        );
+        // The `-` rule should also warn the single-stdin limit names its fix.
+        let dash = conv["rules"]["-"].as_str().unwrap();
+        assert!(
+            dash.contains("--json -"),
+            "`-` rule should name the multi-field fix: {dash}"
+        );
     }
 
     #[test]
